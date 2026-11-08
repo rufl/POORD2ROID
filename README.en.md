@@ -1,5 +1,4 @@
-# POORD2OID — Diablo II: Resurrected on Android
-
+# POORD2ROID — Diablo II: Resurrected on Android on Mali-G77 MC9 / Xiaomi 11T
 [Português](README.md) · [Source](https://github.com/rufl/POORD2OID) · [Licenses and credits](THIRD-PARTY-NOTICES.md)
 
 An experimental Android port for running the Nintendo Switch version of **Diablo II: Resurrected** on compatible Android devices. It runs the game's ARM64 code through an NVN→Vulkan compatibility layer; it is not a conventional emulator.
