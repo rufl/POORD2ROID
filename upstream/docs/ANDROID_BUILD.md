@@ -1,35 +1,46 @@
 # Android build and deployment
 
-The maintained step-by-step instructions are in [README.zh-CN.md](ANDROID_BUILD.zh-CN.md). See the repository [status](../README.md) and [snapshot boundaries](ANDROID_RELEASE_SNAPSHOT.zh-CN.md).
+This page summarizes the Android build from a Linux x86_64 environment. On Windows, use WSL2 and see the fork's [`docs/BUILD_ON_WINDOWS.md`](../../docs/BUILD_ON_WINDOWS.md). The upstream source tree retains additional language-specific documentation; this page is the English build reference.
 
-GitHub Actions (`.github/workflows/build.yml`) builds a **generic APK** on every push (host and frontends, no game code; the game modules come from the package imported on the phone) and a **pack kit** for the player's PC (source + `d2r-package` skill + that APK + a readme). Pushing a `v*` tag publishes a Release carrying both. The APK with embedded game code is still built locally with `--game-source`, because that code derives from the player's own files and stays out of the repository and CI. The portable checks CI runs are the same ones available locally: `python3 dm/android/tools/ci_checks.py`.
+## Build types and game data
 
-Build on Linux x86_64 using `python3 dm/android/tools/bootstrap.py` (NDK r28c, API35, JDK), then install Python dependencies in a virtual environment: `lz4 capstone unicorn numpy pillow zstandard nsz`. Tools default to `~/dm-work/tools/android`; override with `DM_ANDROID_TOOLS`. The build also fetches its pinned `libadrenotools`/`liblinkernsbypass` sources; see [GPU driver notes](ANDROID_GPU_DRIVER.zh-CN.md) for the caches and overrides.
+GitHub Actions builds a generic APK and a pack kit. The generic APK does not contain game data or locally derived game modules; the user imports a data package on the phone. A game-enabled APK can be built locally from the user's own prepared files, but those inputs and generated protected content must stay out of this repository and CI. No game data, firmware, or keys are distributed here.
 
-Prepare your own RomFS, rewritten `main`, `sdk` and `subsdk0` modules, and a matching SPIR-V cache. The repository provides `extract_packages.py`, `patch_nso.py` with `DM_TARGET=android`, and `build_shaders.py`; it does not distribute game data, keys or the generated artifacts. Shader translation additionally requires a .NET 10 SDK (default `~/dm-work/tools/dotnet/dotnet`, installable with the official dotnet-install script; the first NuGet restore needs network).
+## Toolchain
 
-Before the first build in a clean checkout, activate the Python environment and generate the host tables from your own RomFS:
+Run `python3 dm/android/tools/bootstrap.py` to install the pinned Android NDK (r28c), API 35, JDK, and build tools. The toolchain defaults to `~/dm-work/tools/android`; override it with `DM_ANDROID_TOOLS`. Install the Python dependencies listed by the build scripts in a virtual environment. Shader translation requires the .NET 10 SDK and a first-time NuGet restore needs network access. The scripts fetch pinned `libadrenotools` and `liblinkernsbypass` sources as documented in the GPU-driver notes.
 
-```bash
-make -C dm/host dm_vault_tab.h dm_hud_exp.h dm_bright_levels.inc \
-  ROMFS="$HOME/dm-work/data/switch/3.3.94012/Update/RomFS"
-```
+Prepare the user's RomFS and rewritten `main`, `sdk`, and `subsdk0` modules, plus the matching SPIR-V cache. Tools include `extract_packages.py`, `patch_nso.py` with `DM_TARGET=android`, and `build_shaders.py`. Keep all source game packages, keys, and generated game payloads outside Git.
 
-These generated files are Git-ignored. After changing game resources, remove those three files and regenerate them.
+## Build commands
 
 ```bash
-python dm/android/tools/build.py --game-run \
-  --game-source ~/dm-work/build/android/game \
-  --shader-cache ~/dm-work/build/android/shaders/spirv
+python3 dm/android/tools/bootstrap.py
+python3 dm/android/tools/build.py --game-run \
+  --game-source /path/to/prepared/game \
+  --shader-cache /path/to/prepared/shaders/spirv
+python3 dm/android/tools/ci_checks.py
 ```
 
-Output: `dm/android/build/D2R-Android-port.apk`. It includes locally derived game code and is not part of the source publication. Install using `adb -s DEVICE install -r`, and deploy RomFS and shaders once into `/sdcard/Android/data/org.d2r.android.port/files/{romfs,shaders}`. Start `org.d2r.android.port/.D2RActivity`. Updating the APK preserves app data; do not overwrite saves in private `files/save`.
-Use `--keystore PATH` when updating an install signed with a different key than `$DM_ANDROID_TOOLS/debug.keystore`; Android rejects signature-mismatched updates.
+The output is `dm/android/build/D2R-Android-port.apk`. Install it using `adb -s DEVICE install -r`. APK updates require the same signing identity as the installed build; otherwise Android rejects the update. Back up app-private saves before uninstalling an app to change signing identity.
 
-Touch controls, gamepads, keyboard input, native name entry, AAudio and a performance overlay are implemented. The display preserves the game's aspect ratio. Android defaults to a 60 Hz present cap; saved 30 Hz and follow-display preferences remain honored, and follow can be selected manually on high-refresh displays. The cap is a pacing request, not a guaranteed sustained game FPS; scene load and thermals still control performance. Vulkan startup logs identify the device/driver and report extensions, subgroup and relevant format capabilities; BC CPU deswizzle/decode cost is logged per 60-frame interval. Android memory-pressure callbacks trim only completed idle upload buffers. Logs are readable with `adb -s DEVICE shell run-as org.d2r.android.port tail -100 files/game.log`.
+## Android behavior and limits
 
-The launcher keeps three backend modes: System Vulkan, JimVulkan PanVK r9 for Mali kbase devices (`/dev/mali0`, Android 12+), and bundled Turnip for Qualcomm KGSL devices (`/dev/kgsl-3d0`). Hardware-incompatible choices are hidden; the Xiaomi 11T offers System Vulkan and experimental PanVK, not Turnip. APK 0.6.71's app-UID smoke loaded PanVK r9 on Mali-G77 MC9 (driver ID 20, subgroup 16), created a device, and resolved Android-surface/swapchain dispatch. It did not create a real `ANativeWindow` surface, present a frame, enter D2R gameplay, or measure FPS. PanVK remains experimental and non-conformant. See [GPU driver notes](ANDROID_GPU_DRIVER.zh-CN.md).
-On Android emulated external storage, xattr lookup can return `EOPNOTSUPP`. ROMFS path resolution then uses each physical filename as its guest name, including dotfiles such as `.build.config`; saves remain in the app-private `files/save/`.
-The Android APK hardcodes the game's text and voice language to English (`Language` / `VoiceLanguage` = `0`) before every game settings load. It overrides existing Chinese settings and any saved `lang_en` choice without changing other settings or save data. This Android build has no in-game language switch.
+The launcher supports touch, Android game controllers, keyboard input, native name entry, AAudio, and an optional performance overlay. The controller implementation is generic Android input handling; the GameSir G8+ has not been specifically validated. Disabling the stats overlay dismisses its popup instead of leaving a stale frame.
 
-The current source includes private `files/pipeline-cache` persistence and cross-launch pipeline warm-up (`dm/android/native/nvn_vulkan_warm.inc`). Both are verified on device: the driver cache reloads (`load=accepted`) and a 127-record manifest warmed in 447.7 ms in the background. First use of a shader combination in ground the player has not visited still compiles on demand. Diagnostic and test sources remain in the repository.
+Fresh settings request a 30 Hz presentation cap. The cap is a pacing request, not a promise of sustained 30 FPS. Saved preferences can change the cap. The launcher offers in-world 20:9 render-size presets and defaults fresh settings to `1280×576`; higher presets increase GPU work. The game activity can draw into the display cutout area. Verify HUD, map, dialogs, and touch mapping on the target device; menus and loading pages may remain centered 16:9.
+
+The launcher exposes System Vulkan and hardware-gated MaliSX2, JimVulkan PanVK, and Turnip. MaliSX2 and PanVK require Mali/kbase; Turnip requires Qualcomm KGSL. Driver availability does not prove that the driver can present or run D2R. Custom selection is strict; explicitly select System Vulkan to recover. MaliSX2 0.4.0 is checksum-pinned and its license is bundled. Upstream lists Mali-G77 support, but D2R presentation, Xiaomi 11T compatibility, and performance are not guaranteed. PanVK remains experimental. See [`ANDROID_GPU_DRIVER.zh-CN.md`](ANDROID_GPU_DRIVER.zh-CN.md) and the root [`THIRD-PARTY-NOTICES.md`](../../THIRD-PARTY-NOTICES.md).
+
+Optional GPU BC texture decoding can be enabled with `bc_decode_gpu 1` in app-private `files/temp/perf.conf`; default `0` uses CPU decoding. BC6H/BC7 and unsupported texture shapes remain on CPU, and setup failures fall back. This option can lose performance when GPU-bound; compare sustained frame times on the target device.
+
+The app persists Vulkan pipeline cache and can warm pipelines from its manifest. Warm-up reduces some repeat stalls; combinations not seen before can still compile during play. Mali-specific behavior remains device/driver-dependent.
+
+## Logs
+
+```bash
+adb logcat -s D2RAndroid
+adb shell run-as org.d2r.android.port cat files/game.log
+```
+
+Logcat reports launcher driver choice and native driver-loading/identity diagnostics. The app-private game log receives native output after host startup; it may be absent when failure occurs earlier. For a bug report, include device model, Android version, GPU, selected driver, app version, reproduction steps, and relevant logs. Do not include game files, keys, or saves.

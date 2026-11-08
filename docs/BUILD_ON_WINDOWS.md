@@ -1,86 +1,38 @@
-# 在 Windows 上构建上游 APK（上游 build.py 是 Linux-only）
+# Build on Windows with WSL
 
-日期：2026-10-20。为了把安卓端的手柄 / 触屏接管权改动（`adapt/android-gamepad-and-frame-rate.patch`）编进 APK，
-在这台 Windows 机器上把上游 `dm/android/tools/build.py` 跑通了。上游的构建脚本按 Linux 写死，
-下面是把差异全部挪到**本机这一层**、不改上游任何文件的做法。
+The Android build uses Linux tools. On Windows, build inside WSL2 (Ubuntu or another supported Linux distribution) rather than using the obsolete native-Windows wrapper described in earlier revisions.
 
-## 为什么不能直接跑
+## Prerequisites
 
-上游 `build.py`（及 `host_link.py` / `build_gpu_driver.py` / `build_gpu_fixtures.py`）里写死了
-Linux 形态的工具路径与脚本形态：
+- WSL2 with a Linux x86_64 distribution and network access.
+- Git and the packages required by the upstream bootstrap/build scripts.
+- The Android NDK/API/JDK and Python dependencies installed by `upstream/dm/android/tools/bootstrap.py` and the build guide in `upstream/docs/ANDROID_BUILD.md`.
+- .NET SDK 10 and the game files required to generate the local game modules and shader cache. These files are not provided by this repository.
 
-| 上游写死的东西 | Linux 上是什么 | Windows 上要怎么办 |
-| --- | --- | --- |
-| `ndk/toolchains/llvm/prebuilt/linux-x86_64/bin` | Linux 版 NDK 目录 | 建一个同名**假目录**：bin 里放 Windows NDK 的工具副本（连 DLL 一起，工具启动要靠旁边的 DLL），`lib/` 与 `sysroot/` 用 junction 指回真 NDK |
-| `build-tools/d8`、`build-tools/apksigner` | 无扩展名的 shell 脚本 | Windows 上是 `.bat`；`.bat` 本身能被 CreateProcess 直接调起（Python subprocess 验证过），只要路径写对后缀 |
-| `Path.exists()` 查工具 | 有就是有 | Windows 上**不带扩展名**的路径 `exists()` 是 False，而 CreateProcess 会自动补 `.exe` → 每个工具都要额外放一份**无扩展名**的副本 |
-| `import fcntl` | POSIX 才有 | 给 Python 一个 `fcntl` 替身（上游只用 `flock` 做构建互斥锁） |
-| 源码与日志里的中文 | UTF-8 | Windows 上 Python 默认编码是 GBK → 整个构建要开 `PYTHONUTF8=1` |
+## Build
 
-## 目录
+From the WSL shell, clone this repository into a WSL-accessible path (recommended), then follow the bootstrap and build steps in [`upstream/docs/ANDROID_BUILD.md`](../upstream/docs/ANDROID_BUILD.md). Avoid the obsolete native-Windows wrapper and its old `build-win.py` / `build-tools-win` instructions.
 
-下面三样东西在**本仓库之外**（在你的工作区根目录 `<WORK>/`），是 Windows 上的本机布局：
+The Android build script is `upstream/dm/android/tools/build.py`. A game-enabled build requires locally prepared game sources and shader data; a generic launcher APK does not contain game assets. Keep any personal game data, keys, and generated protected content outside version control.
 
-```
-<WORK>/build-tools-win/                 假工具树（DM_ANDROID_TOOLS 指向这里）
-├── ndk/toolchains/llvm/prebuilt/linux-x86_64/
-│   ├── bin/                           Windows NDK 的工具副本 + 各目标三元组的副本（clang 按 argv[0] 定目标）
-│   ├── lib/ → junction → 真 NDK 的 lib
-│   └── sysroot/ → junction → 真 NDK 的 sysroot
-├── ndk/shader-tools/linux-x86_64/glslc.exe
-├── jdk/                               Temurin 21 的**拷贝**（不是 junction：要在旁边放无扩展名副本）
-├── platform/android.jar               API 35
-├── build-tools/                       aapt2 / d8.bat / zipalign / apksigner.bat + 无扩展名副本
-├── platform-tools/adb
-└── pyshim/fcntl.py                    Windows 上的 fcntl 替身
-<WORK>/build-win.py                    把 build.py 当模块加载、拦一层 run() 补 .bat 后缀；上游文件一个字不动
-<WORK>/pack-workspace/setup-win-tools.ps1  生成上面那棵假工具树
+Build output is under `upstream/dm/android/build/`. The signing key determines whether Android accepts an APK as an in-place update: use the same signing identity as the installed app or uninstall the old app first (uninstalling can remove app-private data, so back it up).
+
+## Device diagnostics
+
+For driver selection and Android startup:
+
+```sh
+adb logcat -s D2RAndroid
 ```
 
-## 跑法
+After the native host has started, collect its log with:
 
-```powershell
-$env:DM_ANDROID_TOOLS = '<WORK>\build-tools-win'
-$env:PYTHONUTF8 = '1'
-$env:PYTHONPATH   = '<WORK>\build-tools-win\pyshim'
-& '<WORK>\tools\android-venv\Scripts\python.exe' `
-  '<WORK>\build-win.py' --game-run --version v0.6.57
+```sh
+adb shell run-as org.d2r.android.port cat files/game.log
 ```
 
-> `--version` 给 `0.6.57` 这样的**纯数字**，构建脚本会自己拼上 `-android-port` 后缀；
-> `versionCode` 按 `0*10000 + 6*100 + 57 = 657` 算，比已装的旧版本号大才能 `pm install -r` 原地升级。
+The native log may be absent if startup fails before host initialization. Do not share game assets, keys, or personal save data when reporting issues.
 
-`--game-run` 但不给 `--game-source`：**宿主与前端是真的、游戏模块由手机端导入的数据包提供** ——
-这正是本仓库发布的那种通用 APK（仓库里的 `apk/D2R-Android-port.apk` 就是它，
-原构建输出在 `releases/v0.6.1/`）。
+## Limits
 
-## NDK 必须是 r28c
-
-上游 `bootstrap.py` 钉的是 **r28c**。用 NDK 26.1（LLVM 17）会在这里断掉：
-
-```
-ld.lld: error: undefined hidden symbol: dm_android_context_storage
-```
-
-原因：`dm/android/native/runtime.c` 里那个 `__thread` 变量带 hidden 可见性，LLVM 17 把它编成
-**模拟 TLS**（符号名变成 `__emutls_v.dm_android_context_storage`），而汇编入口
-（`generate_entry.py` 生成的 `entry_elf.S`）按 **TLS 描述符模型**引用它
-（`:tlsdesc:` / `.tlsdesccall`）→ 链接时找不到那个符号。r28c（LLVM 19）下同一处是原生 TLS：
-
-```
-28: 0000000000000000 66632 TLS     GLOBAL HIDDEN      5 dm_android_context_storage
-```
-
-所以 Windows 版 NDK 要下 `android-ndk-r28c-windows.zip`（约 713 MB），
-`build-tools-win/ndk28/android-ndk-r28c/`。
-
-## Windows 上的两个坑
-
-- **PowerShell 5.1 按 GBK 读无 BOM 的 UTF-8 脚本**，中文字节会被吃掉换行（脚本行号对不上、
-  变量莫名其妙为空）。`.ps1` 一律**带 BOM 写**（或全 ASCII）。
-- **删除命令受限**：永久删除被安全策略挡住；可恢复删除要用顶层 `rm -- "<字面量路径>"`
-  （本仓库内的路径才行，变量形式会被拒）。
-
-## 在 Windows 上运行宿主检查
-
-从仓库根目录运行 `python upstream/dm/android/tools/ci_checks.py`。启动配置测试使用 POSIX FIFO、`setenv` 故障注入和 `alarm`，Windows 原生 MinGW 不提供这些接口；Windows 上这两项通过默认 WSL 发行版中的 `bash` 与 `cc` 编译、运行。缺少 WSL 或其 C 编译器时会报告失败，不会静默跳过。其他检查仍由 Windows Python 执行。
+Successful compilation does not prove that a particular GPU driver can present frames or run the game. Use System Vulkan as the baseline, then test eligible alternative drivers separately. Device-specific performance, display safe areas, and controller behavior require on-device validation. See the root README for the current compatibility summary and the third-party notices for binary provenance and licensing.

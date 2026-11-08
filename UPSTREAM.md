@@ -1,44 +1,33 @@
-# Upstream
+# Upstream provenance
 
-本仓库的 `upstream/` 是**上游安卓移植的快照**，上面再叠一层本项目的真机适配。
-先说清三层关系：
+The `upstream/` directory is the imported Android port with this fork's changes integrated. It is no longer a byte-for-byte copy of the upstream repository.
 
-| 层 | 仓库 | 许可 | 角色 |
-| --- | --- | --- | --- |
-| **灵感来源** | [jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) | MIT，Copyright (c) 2026 jhaizhou | iPhone / iPad / Mac / Android / 鸿蒙 的兼容层。**本项目最初的念头来自这里**：自己买的 Switch 版游戏，在自己的手机/平板上原生跑起来 |
-| **直接上游** | [sydeEvans/d2r-android](https://github.com/sydeEvans/d2r-android) | MIT，Copyright (c) 2026 jhaizhou | 把 d2r-mobile 移植到安卓的版本。**`upstream/` 就是它的快照**（固定 commit `5d8e32210b6d54bc0f8140865332a8616766779f`） |
-| **本项目** | 本仓库 | MIT | 在上面的基础上做**真机适配**：Adreno 650 的驱动注入与转发 shim、Mali（天玑/Immortalis）的整套兼容与踩坑修复、触屏/手柄/帧率等 |
+| Project | Role | License / credit |
+| --- | --- | --- |
+| [jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) | Original project and inspiration for the compatibility layer and game-host architecture. | MIT; copyright notices are retained in the imported source. |
+| [sydeEvans/d2r-android](https://github.com/sydeEvans/d2r-android) | Direct Android-port source. The imported baseline is commit `5d8e32210b6d54bc0f8140865332a8616766779f`. | MIT; the upstream source identifies copyright to jhaizhou. |
+| This repository | Device adaptation, Android input and frame pacing, Mali fixes, driver selection/packaging, diagnostics, and Android-specific changes. | See root `LICENSE` and `THIRD-PARTY-NOTICES.md`. |
 
-## `upstream/` 里到底是什么
+## Fork changes
 
-它**不再与上游逐字节相同**：安卓端的改动已经直接落在树里，所以 clone 本仓库就能构建，
-不需要额外打补丁。
+Changes are integrated directly into `upstream/`; cloning this repository does not require applying a patch. The tree includes, among other changes:
 
-| 改了什么 | 在哪 |
-| --- | --- |
-| 手柄接管 / 帧率档 / 崩溃落盘等安卓端改动 | `adapt/android-gamepad-and-frame-rate.patch`（15 个文件） |
-| **Mali（天玑 / Immortalis）适配**：BC 贴图走 CPU 解码、`subgroup=16`、LocalSize Z 折叠 | `upstream/dm/android/native/`、`upstream/dm/gfx/tex/nvn_bcdec.c` |
-| **Mali 上 3D 场景全黑的修复**：折叠时同步改写着色器手算的 z 索引 | `upstream/dm/android/native/nvn_vulkan_zfold.inc`（新）、`upstream/dm/android/native/nvn_vulkan_shader.inc`（改） |
-| 上述修复的独立测试 | `upstream/dm/android/tests/zfold_test.c`（新） |
-| Mali 的实测限制与踩坑记录 | `upstream/docs/ANDROID_MALI_LIMITS.zh-CN.md`（新） |
-| **System / PanVK / Turnip Vulkan 选择** | `upstream/dm/android/java/org/d2r/android/port/LauncherActivity.java`、`upstream/dm/android/native/gpu_driver.c`：System 回退、Mali kbase 的 PanVK、API 30+ KGSL 的 Turnip |
+- Android launcher, touch/gamepad input, frame pacing, startup sequencing, and diagnostics.
+- System Vulkan plus hardware-gated MaliSX2, JimVulkan PanVK, and Turnip driver options.
+- Mali-related BC texture decode and shader workarounds, including local-size Z-fold handling and a regression check.
+- Android display/resolution settings, pipeline-cache persistence/warm-up, and optional GPU BC texture decoding.
 
-Adreno 专有驱动注入、Vulkan 转发 shim 与 APK 改包位于 `adapt/`；通用 System / PanVK / Turnip 选择与开源驱动打包位于 `upstream/`。
+These features are experimental and should not be interpreted as universal device support. See the maintained Android build guide for current behavior and verification limits.
 
-## 怎么看出与上游的差异
+## Comparing to the direct upstream
 
 ```bash
-git clone https://github.com/sydeEvans/d2r-android /tmp/upstream
-diff -ru /tmp/upstream upstream/
+git clone https://github.com/sydeEvans/d2r-android /tmp/d2r-android-upstream
+diff -ru /tmp/d2r-android-upstream upstream/
 ```
 
-## 怎么从干净的上游重新生成
+The historical patch at `adapt/android-gamepad-and-frame-rate.patch` records an earlier set of Android changes. It is not the complete representation of all current fork changes; inspect the tree diff for the full change set.
 
-```bash
-cd /tmp/upstream
-git apply /path/to/this/repo/adapt/android-gamepad-and-frame-rate.patch
-```
+## Rebuilding from an upstream baseline
 
-该补丁对上游 `5d8e322` 适用，对本仓库的 `upstream/` 反向也能干净应用，
-所以两者保证一致。**本项目在这之上的改动没有单独的补丁文件** —— 它们就在树里，
-用上面的 `diff -ru` 就能全部看出来（比逐个补丁更容易读）。
+The patch applies only to the baseline and scope recorded in its header. It does not recreate all current changes. For a full reconstruction, compare the source tree and review the history of this fork; do not assume the historical patch alone reproduces the current APK.

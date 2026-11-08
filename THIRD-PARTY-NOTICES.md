@@ -1,124 +1,82 @@
-# 第三方许可与出处
+# Third-party notices and attribution
 
-本文件列出本仓库**直接使用、修改或再分发**的第三方组件，以及**只作参考、代码未并入**的项目。
-本仓库自身的代码以 MIT 许可发布（见 `LICENSE`）。
+This file records third-party code and binary components used, modified, or redistributed by this repository, plus projects consulted only as references. Preserve the applicable license and copyright notices. The repository's own code is licensed under the root [`LICENSE`](LICENSE), except where a file or component states otherwise.
 
----
+## Source projects
 
-## 一、作为代码来源（vendor 进 `upstream/`，MIT）
+### d2r-mobile
 
-### d2r-mobile — 本项目最初的灵感来源
+- Source: <https://github.com/jhaizhou-ops/d2r-mobile>
+- License: MIT; copyright notices are retained in the imported source.
+- Role: original project and source of the compatibility-layer lineage and host architecture. See `upstream/LICENSE`.
 
-- 仓库：<https://github.com/jhaizhou-ops/d2r-mobile>
-- 许可：MIT，Copyright (c) 2026 jhaizhou
-- 说明：iPhone / iPad / Mac / Android / 鸿蒙 上的《暗黑破坏神 II：狱火重生》兼容层。
-  **本项目的思路源于它**，NVN 截获、宿主结构、触屏与手柄框架都源自这条线。
-- 许可文件：`upstream/LICENSE`
+### d2r-android
 
-### d2r-android — 本仓库 `upstream/` 的直接来源
+- Source: <https://github.com/sydeEvans/d2r-android>
+- Imported baseline: `5d8e32210b6d54bc0f8140865332a8616766779f`
+- License: MIT; imported source identifies copyright to jhaizhou.
+- Role: direct Android port used as the base for this fork. See [`UPSTREAM.md`](UPSTREAM.md).
 
-- 仓库：<https://github.com/sydeEvans/d2r-android>
-- 固定 commit：`5d8e32210b6d54bc0f8140865332a8616766779f`
-- 许可：MIT，Copyright (c) 2026 jhaizhou
-- 说明：把 d2r-mobile 移植到安卓的版本。**`upstream/` 就是它的快照**（已含安卓端改动，
-  不需要额外打补丁），本项目在它之上继续做真机适配。
-- 对照关系见 [`UPSTREAM.md`](UPSTREAM.md)
+## Bundled Vulkan drivers and loader components
 
----
+### MaliSX2 0.4.0
 
-## 二、随包分发的 Vulkan 驱动
-
-### Mesa Turnip
-
-- 仓库：<https://gitlab.freedesktop.org/mesa/mesa>
-- 许可：MIT（Mesa）
-- 构建：T30 Adreno 版本，作者 [@Mr_Purple_666](https://gitlab.freedesktop.org/mesa/mesa)，
-  文件 `vulkan.purple.so`，版本 `26.3.0-T30-1.4.359`
-- 说明：**原样**放在 `upstream/dm/android/prebuilt/turnip/` 并附其 `meta.json`。
-  启动界面仅在检测到 API 30+ 与 `/dev/kgsl-3d0` 时显示 Turnip；System Vulkan 始终是回退。
-- 许可文件：`upstream/dm/android/prebuilt/turnip/`（见 `meta.json` 指向的上游许可）
+- Project/release: <https://github.com/bmdhacks/malisx2/releases/tag/v0.4.0>
+- Pinned source reference: <https://github.com/bmdhacks/armsx2-turnip/tree/f59c211100b174191d9df540451e94b2d5cb2b26>
+- Package: `malisx2-0.4.0-63e307e63a.zip`; SHA-256 `835f980506ed46fa51925fd279b256d23b0ddf481ffd1ab39be2fee275cf8bf8`.
+- Library: `libvulkan_malisx2.so`; SHA-256 `0148e1ea6263653ef376007274eefdf1d58fb63eadf66e2290c6cc49219c0365`.
+- License: MIT, copyright 2026 ARMSX2 and bmdhacks. The binary includes Mesa-derived components; consult the upstream vendor-license inventory and APK notice before redistribution.
+- The build verifies the pinned archive and library hashes. Upstream's stated Mali support is not proof of D2R or Xiaomi 11T compatibility. The release notes identify MSAA as not implemented.
 
 ### JimVulkan PanVK r9 (Mesa 27.0.0-devel)
 
-- Release and source: <https://github.com/JimVulkan/mali-panvk/releases/tag/v1.5.0>
-- File: `upstream/dm/android/prebuilt/mali-panvk-27.0.0-devel-r9.zip`; ZIP SHA-256 `04d82e2f35e4e80138f9a407ec4222e40908b32196eb7484355993e6c5fdc376`; bundled `libvulkan_panfrost.so` SHA-256 `6baf04f6075fe57d0dc1738039cf91d8db6ce98c9203dd9dc3d638f42c49e62a`.
-- License: MIT for the PanVK changes; the packaged `NOTICE.txt` carries Mesa and bundled third-party notices/license texts and is included in the APK as `PanVK-JimVulkan-r9.txt`.
-- Status: experimental, non-conformant Mali kbase driver; Android API 31+; upstream release lists Mali-G77 support. APK 0.6.71 on Xiaomi 11T loaded PanVK (driver ID 20), created a device, and resolved Android-surface/swapchain dispatch. No `ANativeWindow` surface, presentation, D2R gameplay or FPS was tested. The custom driver namespace can access Android platform dependencies; no private system libraries are bundled.
+- Release/source: <https://github.com/JimVulkan/mali-panvk/releases/tag/v1.5.0>
+- Pinned package: `upstream/dm/android/prebuilt/mali-panvk-27.0.0-devel-r9.zip`; SHA-256 `04d82e2f35e4e80138f9a407ec4222e40908b32196eb7484355993e6c5fdc376`.
+- Bundled library `libvulkan_panfrost.so`; SHA-256 `6baf04f6075fe57d0dc1738039cf91d8db6ce98c9203dd9dc3d638f42c49e62a`.
+- License: MIT for PanVK changes; the package's `NOTICE.txt` contains Mesa and third-party notices and is included in the APK as `PanVK-JimVulkan-r9.txt`.
+- Status: experimental and non-conformant. Hardware support or successful device initialization does not demonstrate Android presentation or working D2R gameplay. Treat as an experimental option.
 
+### Mesa Turnip T30
 
-### AdrenoTools（`libadrenotools.so` / `libhook_impl.so` / `libmain_hook.so`）
+- Mesa project: <https://gitlab.freedesktop.org/mesa/mesa>
+- Build metadata: `upstream/dm/android/prebuilt/turnip/meta.json`; build name `Turnip Adreno Driver T30 (@Mr_Purple_666)`, package version `T30`.
+- License: Mesa license and notices shipped with the driver package. The metadata credits @Mr_Purple_666 and thanks DISKDVD.
+- Hardware: Qualcomm Adreno/KGSL; not applicable to Mali devices such as Xiaomi 11T.
 
-- 仓库：<https://gitlab.freedesktop.org/mesa/mesa> 之外的独立项目
-  AdrenoTools（<https://github.com/obfusk/adrenotools>）
-- 许可：MIT
-- 说明：APK 内的 hook 库，让 Android Vulkan loader 去枚举应用的 `nativeLibraryDir` 找 ICD。
-  是"驱动做进 APK"这一步的关键，源码不在本仓库（随上游二进制提供）。
+### AdrenoTools
 
----
+- Project: <https://github.com/obfusk/adrenotools>
+- License: MIT.
+- Role: Android Vulkan driver loading/hook support used by the build. The build fetches pinned source; preserve its upstream license and notices.
 
-## 三、只作参考、代码未并入
+## Vendored libraries
 
-### Eden（Switch 模拟器）
+The source tree contains third-party components under `upstream/dm/third_party/`, including:
 
-- 仓库：<https://git.eden-emu.dev/eden-emu/eden>
-- 许可：**GPL-3.0**
-- 说明：**仅作设计参考**。本项目参考了它的异步调度（`vk_scheduler.cpp`）、完成序号
-  （`vk_master_semaphore.cpp`）、上传缓冲池（`vk_staging_buffer_pool.cpp`）与 Android 驱动装载
-  （`android/app/src/main/jni/native.cpp`）。
-  **它的着色器翻译是 GPL-3.0，没有并入本 MIT 项目** —— 这一点在仓库里是刻意守住的边界。
-- 参考的具体入口记在 `upstream/docs/ANDROID_GPU_REVIEW.zh-CN.md`
-
-### LASRecomp
-
-- 仓库：<https://github.com/GPUOpen-Effects/LASRecomp>
-- 许可：Apache-2.0
-- 说明：超分/重建的思路参考，代码未并入。
-
-### AMD FSR 1.0 / 高通 SGSR
-
-- FSR：<https://github.com/GPUOpen-Effects/FidelityFX-FSR>（MIT）
-- SGSR：<https://github.com/SnapdragonGameStudios/snapdragon-gsr>（BSD-3-Clause）
-- 说明：超分方案调研（`upstream/docs/ANDROID_UPSCALING_RESEARCH.zh-CN.md`），代码未并入。
-
----
-
-## 四、`upstream/dm/third_party/` 下的库
-
-| 目录 | 上游 | 许可 |
+| Component | Upstream | License / note |
 | --- | --- | --- |
-| `ryujinx/` | <https://github.com/Ryujinx/Ryujinx> | MIT |
-| `libdeflate/` | <https://github.com/ebiggers/libdeflate> | MIT |
-| `bcdec/` | <https://github.com/iOrange/bcdec> | MIT（部分函数参考 <https://gist.github.com/rygorous/2144712>） |
-| `flip/` | <https://github.com/Flipboard/FLIP> | MIT（工具目录里的 stb_image / tinyexr / miniz 各自保留原许可） |
+| Ryujinx components | <https://github.com/Ryujinx/Ryujinx> | MIT; retain included notices. |
+| libdeflate | <https://github.com/ebiggers/libdeflate> | MIT. |
+| bcdec | <https://github.com/iOrange/bcdec> | MIT; some decoder techniques reference <https://gist.github.com/rygorous/2144712>. |
+| FLIP | <https://github.com/Flipboard/FLIP> | MIT; bundled stb_image, tinyexr, and miniz retain their own notices. |
 
----
+`liblinkernsbypass` is a pinned build dependency fetched from <https://github.com/libxdp/liblinkernsbypass>; its applicable Apache-2.0/MIT notices must be retained with the fetched source and build output.
 
-## 五、本仓库自带的第三方工具
+`adapt/zipalign.py` and `adapt/vk_shim3.c` are fork-authored tools, not third-party imports; see the root license.
 
-| 文件 | 来源 | 许可 |
-| --- | --- | --- |
-| `adapt/zipalign.py` | 本仓库自己写的纯 Python ZIP 重写器（对齐到 4096，padding 放进 extra field `0xD935`） | MIT |
-| `adapt/vk_shim3.c` | 本仓库自己写的转发 shim | MIT |
-| `build-tools-win/sources/libadrenotools-*` | AdrenoTools（见上） | MIT |
-| `build-tools-win/sources/liblinkernsbypass-*` | <https://github.com/libxdp/liblinkernsbypass> | Apache-2.0 / MIT |
 
----
+## References only; code not incorporated as a dependency
 
-## 六、**不**随本仓库分发的内容
+- [Eden](https://git.eden-emu.dev/eden-emu/eden), GPL-3.0: design reference only. Eden's shader translation code is not incorporated.
+- [LASRecomp](https://github.com/GPUOpen-Effects/LASRecomp), Apache-2.0: research reference; no code imported.
+- [AMD FidelityFX FSR](https://github.com/GPUOpen-Effects/FidelityFX-FSR), MIT, and [Qualcomm SGSR](https://github.com/SnapdragonGameStudios/snapdragon-gsr), BSD-3-Clause: upscaling research references; no code imported.
 
-| 内容 | 原因 |
-| --- | --- |
-| 任何游戏资源、RomFS、`.nsp` / `.nsz` / `.xci`、游戏密钥（`prod.keys` / `title.keys`） | 版权与许可证；玩家必须用自己的正版介质生成数据包 |
-| 高通 Adreno 840 驱动的专有二进制（`drivers/Qualcomm_840/*.so`） | 专有二进制，无再分发授权。见 `drivers/Qualcomm_840/README.md` |
-| 包含上述专有驱动的成品 APK | 同上 |
+## Not distributed by this repository
 
-`.gitignore` 里对 `*.keys` / `prod.keys` / `title.keys` / `switch key/` / `*.apk`（构建产物）/
-`*.nsp` / `*.nsz` 有明确排除。
+- Game files, RomFS, NSP/NSZ/XCI images, firmware, or `prod.keys`/`title.keys`. Users are responsible for lawful possession and preparation of their own data.
+- Proprietary Qualcomm Adreno 840 libraries. See [`drivers/Qualcomm_840/README.md`](drivers/Qualcomm_840/README.md); the repository contains no such binaries and grants no redistribution rights.
+- APKs incorporating those proprietary libraries.
 
----
+## Trademarks
 
-## 七、商标
-
-《暗黑破坏神 II：狱火重生》与《术士君临》是暴雪娱乐的商标与作品；
-《任天堂 Switch》是任天堂的商标。本项目是**非官方**的兼容层，
-与暴雪娱乐、任天堂及其关联方无隶属关系，也未获得它们的背书。
+Diablo II: Resurrected and Nintendo Switch are marks of their respective owners. This is an unofficial, independent project with no affiliation with or endorsement by Blizzard Entertainment or Nintendo.
