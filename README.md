@@ -1,4 +1,4 @@
-# POORD2OID — Diablo II: Resurrected no Android
+# POORD2ROID — Diablo II: Resurrected no Android na Mali-G77 MC9 / Xiaomi 11T
 
 [English version](README.en.md) · [Código-fonte](https://github.com/rufl/POORD2OID) · [Licenças e créditos](THIRD-PARTY-NOTICES.md)
 
