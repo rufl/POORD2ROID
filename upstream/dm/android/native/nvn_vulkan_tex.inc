@@ -10,6 +10,11 @@ typedef struct image_entry {
     cached_image_view *views;
     struct image_entry *next,*hash_next;
 } image_entry;
+typedef struct bc_gpu_plan { VkDeviceSize input_size,output_offset,output_size; uint32_t output_pitch; } bc_gpu_plan;
+static int bc_gpu_plan_make(uint32_t format,uint32_t target,uint32_t width,uint32_t height,uint32_t source_pitch,
+                            uint64_t input_size,int bytes_per_pixel,bc_gpu_plan *plan);
+static int bc_gpu_dispatch(VkBuffer buffer,const bc_gpu_plan *plan,uint32_t source_pitch,uint32_t width,uint32_t height,
+                           uint32_t format,uint32_t bytes_per_pixel);
 typedef struct { int valid; tex_t texture; view_t view; } texture_descriptor;
 typedef struct { int valid; samp_par parameters; VkSampler sampler; } sampler_descriptor;
 static image_entry *image_list,*image_index[4096];
@@ -19,6 +24,7 @@ static int texture_capacity, sampler_capacity;
 static pthread_mutex_t descriptor_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t texture_uploads, render_passes, draw_count;
 static _Atomic uint64_t bc_decode_jobs,bc_decode_input_bytes,bc_decode_output_bytes,bc_decode_wall_ns;
+static _Atomic uint64_t bc_gpu_decode_jobs,bc_gpu_decode_input_bytes,bc_gpu_decode_output_bytes,bc_gpu_decode_record_ns;
 static uint64_t image_barriers;
 static uint64_t image_read_only_transitions;   // 转到只读布局的次数（诊断用）
 static VkImageView image_view_get(image_entry *e,VkImageViewType type,VkImageSubresourceRange range) {
@@ -233,43 +239,55 @@ static void image_upload(image_entry *e) {
     for(unsigned layer=0;layer<t->L.layers;layer++)for(unsigned level=0;level<t->d.levels;level++){
         int bw,bh;uint32_t bpb=nvn_fmt_bpb(t->d.format,&bw,&bh),w=dimension(t->d.width,level),h=dimension(t->d.height,level),d=t->d.target==NVN_TEXTURE_TARGET_3D?dimension(t->d.depth,level):1;
         uint32_t pitch=(w+bw-1)/bw*bpb,rows=(h+bh-1)/bh;uint64_t bytes=(uint64_t)pitch*rows*d;
-        // 解压后每行按像素算，上传给 GPU 的也是像素行。
-        // After decoding, rows are pixel rows and that is what the GPU receives.
-        size_t upload_pitch = decode_bc ? (size_t)w * unpacked_bpp : pitch;
-        size_t upload_rows = decode_bc ? h : rows;
-        post_op *p=post_new(3);p->source=buffer_create((uint64_t)upload_pitch*upload_rows*d);
+        bc_gpu_plan gpu_plan={0};
+        int gpu_planned=decode_bc&&d==1&&bc_gpu_plan_make(t->d.format,t->d.target,w,h,pitch,(uint64_t)pitch*rows,unpacked_bpp,&gpu_plan);
+        size_t upload_pitch=decode_bc?(gpu_planned?gpu_plan.output_pitch:(size_t)w*unpacked_bpp):pitch;
+        size_t upload_rows=decode_bc?h:rows;
+        uint64_t staging_size=gpu_planned?gpu_plan.output_offset+gpu_plan.output_size:(uint64_t)upload_pitch*upload_rows*d;
+        post_op *p=post_new(3);p->source=buffer_create(staging_size);
         if(decode_bc){
             uint64_t decode_started=dm_android_clock_ns(CLOCK_MONOTONIC);
-            // 压缩块先解排布到临时区（按块行），再逐行解码进暂存区。
-            // 3D 纹理的 d 层块必须一起放下：下面按 z 逐层取 blocks+z*pitch*rows，
-            // 只分配一层就是堆越界 —— 这会把驱动内部结构写坏，之后建任何管线都可能在驱动里 SIGSEGV。
-            // Deswizzle the compressed blocks into a temporary area (block rows) first, then decode row by row.
-            // A 3D texture needs all d slices resident: the loop below indexes blocks+z*pitch*rows, so
-            // allocating one slice is a heap overflow -- it corrupts driver-side state, after which creating
-            // any pipeline can SIGSEGV inside the driver.
-            uint8_t *blocks=malloc((size_t)pitch*rows*d);
-            if(!blocks)die("Vulkan BC staging allocation");
-            if(t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR|NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)){
-                const uint8_t *src=storage+nvn_tex_level_offset(&t->d,level)+layer*t->L.layer_size;size_t stride=t->d.stride?t->d.stride:pitch;
-                for(unsigned y=0;y<rows;y++)memcpy(blocks+y*pitch,src+y*stride,pitch);
-            }else if(nvn_deswizzle(&t->d,level,layer,storage,blocks,pitch))die("Vulkan texture deswizzle failed");
-            for(unsigned z=0;z<d;z++){
-                // 逐片解码：BC 解码器按「块行 pitch」读、按「像素行 dpitch」写。
-                // Decode per slice: the BC decoder reads block rows at pitch and writes pixel rows at dpitch.
-                if(nvn_bc_decode(t->d.format,blocks+z*pitch*rows,pitch,w,h,
-                                 (uint8_t*)p->source.mapped+z*upload_pitch*upload_rows,upload_pitch))
-                    die("Vulkan BC decode failed format=%#x %ux%u",t->d.format,w,h);
+            int dispatched=0;
+            if(gpu_planned){
+                uint8_t *blocks=p->source.mapped;
+                if(t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR|NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)){
+                    const uint8_t *src=storage+nvn_tex_level_offset(&t->d,level)+layer*t->L.layer_size;size_t stride=t->d.stride?t->d.stride:pitch;
+                    for(unsigned y=0;y<rows;y++)memcpy(blocks+y*pitch,src+y*stride,pitch);
+                }else if(nvn_deswizzle(&t->d,level,layer,storage,blocks,pitch))die("Vulkan texture deswizzle failed");
+                dispatched=bc_gpu_dispatch(p->source.buffer,&gpu_plan,pitch,w,h,t->d.format,(uint32_t)unpacked_bpp);
+                if(!dispatched&&nvn_bc_decode(t->d.format,blocks,pitch,w,h,
+                    (uint8_t*)p->source.mapped+gpu_plan.output_offset,upload_pitch))
+                    die("Vulkan BC CPU fallback failed format=%#x %ux%u",t->d.format,w,h);
+            }else{
+                // BC6H/BC7, 3D textures, oversized buffers and disabled GPU decode retain the proven CPU path.
+                uint8_t *blocks=malloc((size_t)pitch*rows*d);
+                if(!blocks)die("Vulkan BC staging allocation");
+                if(t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR|NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)){
+                    const uint8_t *src=storage+nvn_tex_level_offset(&t->d,level)+layer*t->L.layer_size;size_t stride=t->d.stride?t->d.stride:pitch;
+                    for(unsigned y=0;y<rows;y++)memcpy(blocks+y*pitch,src+y*stride,pitch);
+                }else if(nvn_deswizzle(&t->d,level,layer,storage,blocks,pitch))die("Vulkan texture deswizzle failed");
+                for(unsigned z=0;z<d;z++)
+                    if(nvn_bc_decode(t->d.format,blocks+z*pitch*rows,pitch,w,h,
+                        (uint8_t*)p->source.mapped+z*upload_pitch*upload_rows,upload_pitch))
+                        die("Vulkan BC decode failed format=%#x %ux%u",t->d.format,w,h);
+                free(blocks);
             }
-            free(blocks);
             uint64_t decode_elapsed=dm_android_clock_ns(CLOCK_MONOTONIC)-decode_started;
-            atomic_fetch_add(&bc_decode_jobs,1);atomic_fetch_add(&bc_decode_input_bytes,bytes);
-            atomic_fetch_add(&bc_decode_output_bytes,(uint64_t)upload_pitch*upload_rows*d);
-            atomic_fetch_add(&bc_decode_wall_ns,decode_elapsed);
+            if(dispatched){
+                atomic_fetch_add(&bc_gpu_decode_jobs,1);atomic_fetch_add(&bc_gpu_decode_input_bytes,bytes);
+                atomic_fetch_add(&bc_gpu_decode_output_bytes,gpu_plan.output_size);atomic_fetch_add(&bc_gpu_decode_record_ns,decode_elapsed);
+            }else{
+                atomic_fetch_add(&bc_decode_jobs,1);atomic_fetch_add(&bc_decode_input_bytes,bytes);
+                atomic_fetch_add(&bc_decode_output_bytes,(uint64_t)upload_pitch*upload_rows*d);
+                atomic_fetch_add(&bc_decode_wall_ns,decode_elapsed);
+            }
         }else if(t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR|NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)){
             const uint8_t *src=storage+nvn_tex_level_offset(&t->d,level)+layer*t->L.layer_size;size_t stride=t->d.stride?t->d.stride:pitch;
             for(unsigned z=0;z<d;z++)for(unsigned y=0;y<rows;y++)memcpy((uint8_t*)p->source.mapped+(z*rows+y)*pitch,src+(z*rows+y)*stride,pitch);
         }else if(nvn_deswizzle(&t->d,level,layer,storage,p->source.mapped,pitch))die("Vulkan texture deswizzle failed");
-        VkBufferImageCopy r={.imageSubresource={e->aspect,level,layer,1},.imageExtent={w,h,d}};
+        VkBufferImageCopy r={.bufferOffset=gpu_planned?gpu_plan.output_offset:0,
+            .bufferRowLength=gpu_planned?(uint32_t)(upload_pitch/unpacked_bpp):0,.bufferImageHeight=gpu_planned?h:0,
+            .imageSubresource={e->aspect,level,layer,1},.imageExtent={w,h,d}};
         vkCmdCopyBufferToImage(command,p->source.buffer,e->image,VK_IMAGE_LAYOUT_GENERAL,1,&r);
     }
     if(e->gpu_written){image_gpu_overwrites++;if(image_gpu_overwrites<=6||!(image_gpu_overwrites%64))LOG("[vulkan-upload] 覆盖 GPU 已渲染内容 serial=%llu %ux%u format=%#x bytes=%llu 第 %llu 次（客体内存里没有 GPU 那次渲染的结果）",(unsigned long long)t->serial,t->d.width,t->d.height,t->d.format,(unsigned long long)t->L.size,(unsigned long long)image_gpu_overwrites);}

@@ -70,7 +70,7 @@ int dm_nvn_ruler_truth(void);         // 视觉尺子真值阶段（DM_NVN_RULER
 uint64_t dm_nvn_frame_count(void);
 uint64_t dm_nvn_sub_cpu_ns(void);     // 提交（不含出图）累计 CPU 纳秒 | Cumulative CPU nanoseconds of submit (excluding present)
 int dm_ingame_now(void);              // 是否在局内（diag.c） | Whether we are in a run (diag.c)
-void dm_3d_scale_feed(double iv_ms);   // 出图线程每帧报实际上屏间隔（−1 丢弃 / 0 无读数），驱动动态 3D 比例 | The present thread reports the actual present interval every frame (−1 discard / 0 no reading), driving the dynamic 3D scale
+void dm_3d_scale_feed(double iv_ms, double gpu_ms);   // 上屏间隔（−1 丢弃 / 0 无读数）与 GPU 批次时间（无效时 ≤0），驱动动态 3D 比例 | Present interval (−1 dropped / 0 unavailable) and GPU batch time (≤0 if invalid), driving dynamic 3D scale
 float dm_3d_scale_cur(void);          // 当前生效的 3D 渲染比例（hle_oe.c scale3d_tick）     // 当前累计出图帧数（DM_TICKS 对齐观测） | The 3D render scale currently in effect (hle_oe.c scale3d_tick)     // current cumulative count of presented frames (for DM_TICKS alignment observation)
 void dm_3d_scale_resumed(void);       // 前端：刚回前台。回来头几秒的慢帧是恢复（表面重建、缓存变冷），不是 GPU 吃紧：停判 3 秒 | front end: just returned to the foreground. Slow frames in the first seconds back are recovery (surface rebuild, caches gone cold), not GPU pressure: stop judging for 3 seconds
 void dm_3d_scale_set_preset(int preset);   // 游戏内菜单的「画质」档位：-1 自动、0 高质量、1 平衡 0.85、2 性能 0.70、3 超性能 0.50；固定档位期间动态控制器不插手 | In-game quality presets: -1 auto, 0 high, 1 balanced 0.85, 2 performance 0.70, 3 ultra performance 0.50; dynamic scaling is paused while pinned

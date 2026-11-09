@@ -38,7 +38,7 @@ No Xiaomi 11T (Dimensity 1200, Mali-G77 MC9), as opções esperadas são System 
 
 ### Tela, taxa de quadros e desempenho
 
-Em configurações novas, o port solicita uma área de jogo 20:9 em 1280×576 e limita a apresentação a 30 Hz/FPS, conforme as preferências iniciais do launcher. Isso é uma solicitação de configuração, não uma garantia de 30 FPS sustentados; cenas pesadas, compilação de shaders, temperatura e limites do driver podem reduzir o desempenho. Menus e telas de carregamento podem manter apresentação central 16:9. A área útil pode diferir por causa de recortes/barras do Android; confira HUD, mapa, diálogos e controles no aparelho.
+Em configurações novas, o port solicita mundo em 20:9 a 1280×576 e apresentação limitada a 30 Hz/FPS; isso não garante 30 FPS sustentados. No Android, o mundo mantém a área ampla e a HUD usa um canvas lógico 16:9 central, com os toques da interface convertidos para a mesma área segura. Menus e carregamentos continuam centralizados em 16:9. A mudança está coberta por testes de geometria e build Android; a validação visual final de HUD, mapa, diálogos e controles ainda depende do aparelho.
 
 O modo de decodificação GPU de texturas BC é opcional e vem desativado por padrão: pode deslocar trabalho da CPU para a GPU, mas não é necessariamente mais rápido em cenas limitadas pela GPU. Compare tempos de quadro sustentados antes de habilitá-lo. O cache de pipelines e o aquecimento reduzem algumas compilações repetidas, não eliminam toda compilação durante o jogo.
 

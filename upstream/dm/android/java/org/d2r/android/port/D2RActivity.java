@@ -172,7 +172,13 @@ public final class D2RActivity extends NativeActivity {
         title.setPadding((int)(10 * density), 0, (int)(10 * density), (int)(4 * density));
         column.addView(title);
         menuOverlayRow = menuRow();
-        menuOverlayRow.setOnClickListener(v -> { overlayEnabled = !overlayEnabled; setOverlayEnabled(overlayEnabled); persistOverlay(); updateMenuLabels(); });
+        menuOverlayRow.setOnClickListener(v -> {
+            overlayEnabled = !overlayEnabled;
+            setOverlayEnabled(overlayEnabled);
+            setDebugOverlay(overlayEnabled);
+            persistOverlay();
+            updateMenuLabels();
+        });
         column.addView(menuOverlayRow);
         menuControlsRow = menuRow();
         menuControlsRow.setOnClickListener(v -> { controlsEnabled = !controlsEnabled; updateTouchVisibility(); updateMenuLabels(); });
@@ -428,6 +434,12 @@ public final class D2RActivity extends NativeActivity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams attributes = getWindow().getAttributes();
+            attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(attributes);
+        }
         // 标记与活动的「创建 / 销毁」这一对绑定，语义就是"这个进程里还住着一个游戏活动"。
         // The flag is paired with activity creation/destruction: it means "a game activity still lives in this process".
         hostRunning = true;
@@ -456,14 +468,19 @@ public final class D2RActivity extends NativeActivity {
         debugView.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         int padding = (int)(8 * getResources().getDisplayMetrics().density);
         debugView.setPadding(padding, padding, padding, padding);
-        // Vulkan 拥有主窗口缓冲；独立应用内窗口才能稳定叠加系统绘制的文字。
+        debugView.setVisibility(overlayEnabled ? android.view.View.VISIBLE : android.view.View.GONE);
         // Vulkan owns the main window buffer; a separate app window keeps system-drawn text visible above it.
         debugPopup = new PopupWindow(debugView, FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, false);
         debugPopup.setTouchable(false);
         debugPopup.setTouchModal(false);
         debugPopup.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
         debugPopup.setBackgroundDrawable(new ColorDrawable(0));
-        getWindow().getDecorView().post(() -> { if (!isFinishing() && !isDestroyed()) debugPopup.showAtLocation(getWindow().getDecorView(), Gravity.TOP | Gravity.LEFT, padding, padding); });
+        if (overlayEnabled) {
+            getWindow().getDecorView().post(() -> {
+                if (overlayEnabled && !isFinishing() && !isDestroyed() && !debugPopup.isShowing())
+                    debugPopup.showAtLocation(getWindow().getDecorView(), Gravity.TOP | Gravity.LEFT, padding, padding);
+            });
+        }
         // 粘性广播：注册即回调一次当前值，之后只在系统电量变化时推送，不产生轮询开销。
         // Sticky broadcast: registering delivers the current value once, then only on system battery changes; no polling.
         batteryReceiver = new BroadcastReceiver() {
@@ -608,14 +625,21 @@ public final class D2RActivity extends NativeActivity {
         runOnUiThread(() -> { if (debugView != null && !isFinishing() && !isDestroyed()) debugView.setText(text); });
     }
 
-    // 由原生调试线程在启动时调用一次；关掉时把浮层内容整个隐藏，而不只是停止刷新。
-    // 弹窗本身留着不销毁（它是 setTouchable(false)，不抢输入），只是没有可见内容。
-    // Called once at startup by the native debug thread. Hiding removes the overlay content entirely rather than
-    // merely stopping refreshes; the popup itself stays (it is setTouchable(false) and takes no input), just empty.
+    // Called from the native debug thread at startup and directly from the in-game toggle.
+    // Dismiss the popup itself when hidden: GONE on its content can leave the old PopupWindow surface
+    // composited with its last frame on some Android window paths.
     public void setDebugOverlay(boolean visible) {
         runOnUiThread(() -> {
-            if (debugView != null && !isFinishing() && !isDestroyed())
-                debugView.setVisibility(visible ? android.view.View.VISIBLE : android.view.View.GONE);
+            if (debugView == null || isFinishing() || isDestroyed()) return;
+            if (!visible) {
+                if (debugPopup != null && debugPopup.isShowing()) debugPopup.dismiss();
+                debugView.setVisibility(android.view.View.GONE);
+                return;
+            }
+            debugView.setVisibility(android.view.View.VISIBLE);
+            if (debugPopup != null && !debugPopup.isShowing())
+                debugPopup.showAtLocation(getWindow().getDecorView(), Gravity.TOP | Gravity.LEFT,
+                    debugView.getPaddingLeft(), debugView.getPaddingTop());
         });
     }
 

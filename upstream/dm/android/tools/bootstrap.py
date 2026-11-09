@@ -43,7 +43,11 @@ def download(url, path, sha1=None, total=0):
                                 "--output", str(piece), url], check=True)
             if piece.stat().st_size != end - start:
                 raise RuntimeError("Server returned wrong range: " + piece.name)
-            os.pwrite(fd, piece.read_bytes(), start)
+            # os.pwrite is unavailable on Windows; independent handles keep
+            # concurrent writes to disjoint byte ranges portable.
+            with temp.open("r+b") as output:
+                output.seek(start)
+                output.write(piece.read_bytes())
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
                 list(pool.map(part, ranges))

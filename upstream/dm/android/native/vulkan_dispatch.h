@@ -14,6 +14,7 @@
     X(vkGetDeviceProcAddr) \
     X(vkGetPhysicalDeviceFeatures) \
     X(vkGetPhysicalDeviceFeatures2) \
+    X(vkGetPhysicalDeviceImageFormatProperties) \
     X(vkGetPhysicalDeviceFormatProperties) \
     X(vkGetPhysicalDeviceFormatProperties2) \
     X(vkGetPhysicalDeviceMemoryProperties) \
@@ -94,6 +95,7 @@
     X(vkDestroyBufferView) \
     X(vkDestroyCommandPool) \
     X(vkDestroyDescriptorPool) \
+    X(vkDestroyDescriptorSetLayout) \
     X(vkDestroyDevice) \
     X(vkDestroyFence) \
     X(vkDestroyFramebuffer) \
@@ -197,6 +199,7 @@
 #define vkDestroyBufferView(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyBufferView)(__VA_ARGS__)
 #define vkDestroyCommandPool(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyCommandPool)(__VA_ARGS__)
 #define vkDestroyDescriptorPool(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyDescriptorPool)(__VA_ARGS__)
+#define vkDestroyDescriptorSetLayout(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyDescriptorSetLayout)(__VA_ARGS__)
 #define vkDestroyDevice(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyDevice)(__VA_ARGS__)
 #define vkDestroyFence(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyFence)(__VA_ARGS__)
 #define vkDestroyFramebuffer(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyFramebuffer)(__VA_ARGS__)
@@ -226,7 +229,7 @@
 #define vkGetPhysicalDeviceFeatures(...) (DM_VK_DISPATCH_CONTEXT.vkGetPhysicalDeviceFeatures)(__VA_ARGS__)
 #define vkGetPhysicalDeviceFeatures2(...) (DM_VK_DISPATCH_CONTEXT.vkGetPhysicalDeviceFeatures2)(__VA_ARGS__)
 #define vkGetPhysicalDeviceFormatProperties(...) (DM_VK_DISPATCH_CONTEXT.vkGetPhysicalDeviceFormatProperties)(__VA_ARGS__)
-#define vkGetPhysicalDeviceFormatProperties2(...) (DM_VK_DISPATCH_CONTEXT.vkGetPhysicalDeviceFormatProperties2)(__VA_ARGS__)
+#define vkGetPhysicalDeviceImageFormatProperties(...) (DM_VK_DISPATCH_CONTEXT.vkGetPhysicalDeviceImageFormatProperties)(__VA_ARGS__)
 #define vkGetPhysicalDeviceMemoryProperties(...) (DM_VK_DISPATCH_CONTEXT.vkGetPhysicalDeviceMemoryProperties)(__VA_ARGS__)
 #define vkGetPhysicalDeviceProperties(...) (DM_VK_DISPATCH_CONTEXT.vkGetPhysicalDeviceProperties)(__VA_ARGS__)
 #define vkGetPhysicalDeviceProperties2(...) (DM_VK_DISPATCH_CONTEXT.vkGetPhysicalDeviceProperties2)(__VA_ARGS__)

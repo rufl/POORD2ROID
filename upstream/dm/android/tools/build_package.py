@@ -68,6 +68,19 @@ def collect_romfs(directory):
     return entries
 
 
+def collect_romfs_overlay(directory):
+    """Accept only the generated overlay index and its single replacement archive."""
+    require_directory(directory, "romfs overlay")
+    data = directory / "data"
+    config = data / ".build.config"
+    archives = sorted(path for path in data.glob("*.data") if path.is_file() and not path.is_symlink())
+    if not config.is_file() or config.is_symlink() or len(archives) != 1:
+        raise PackageError(f"romfs overlay must contain a generated data/.build.config and one new .data archive: {directory}")
+    return [config, *archives]
+
+
+
+
 def collect_shaders(directory):
     """着色器目录必须带分组档位文件，而且它**必须打进包里**。
 
@@ -110,9 +123,10 @@ def write_entry(archive, source, name, progress):
     return written
 
 
-def assemble(output, game, romfs, shaders, derived=None, note=None, quiet=False):
+def assemble(output, game, romfs, shaders, derived=None, note=None, quiet=False, romfs_overlay=None):
     game_files = collect_game(game)
     romfs_files = collect_romfs(romfs)
+    overlay_files = collect_romfs_overlay(romfs_overlay) if romfs_overlay is not None else []
     subgroup, shader_files = collect_shaders(shaders)
     # derived.tsv：三张游戏派生表（编年史仓库 / 经验 / 关卡亮度）的内容。壳模式的 APK 里只有空表与条数，
     # 内容全从这份文件读 —— 没有它，那三块功能会是空的（运行时打红字）。
@@ -127,12 +141,14 @@ def assemble(output, game, romfs, shaders, derived=None, note=None, quiet=False)
             raise PackageError(f"derived table is empty: {derived}")
 
     total_romfs = sum(p.stat().st_size for p in romfs_files)
+    total_overlay = sum(p.stat().st_size for p in overlay_files)
     total_shaders = sum(p.stat().st_size for p in shader_files)
     total_game = sum((game / n).stat().st_size for n in game_files)
 
     if not quiet:
         print(f"模块 {len(game_files)} 个 {total_game/1048576:.1f} MiB", flush=True)
         print(f"RomFS {len(romfs_files)} 个档案 {total_romfs/1073741824:.2f} GiB", flush=True)
+        print(f"RomFS overlay {len(overlay_files)} 个档案 {total_overlay/1048576:.2f} MiB", flush=True)
         print(f"着色器 {len(shader_files)} 个 {total_shaders/1048576:.1f} MiB（分组档位 {subgroup}）", flush=True)
 
     manifest = {
@@ -140,8 +156,8 @@ def assemble(output, game, romfs, shaders, derived=None, note=None, quiet=False)
         "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": note or "user-supplied game files",
         "subgroup_size": subgroup,
-        "counts": {"game": len(game_files), "romfs": len(romfs_files), "shaders": len(shader_files)},
-        "bytes": {"game": total_game, "romfs": total_romfs, "shaders": total_shaders},
+        "counts": {"game": len(game_files), "romfs": len(romfs_files), "romfs_overlay": len(overlay_files), "shaders": len(shader_files)},
+        "bytes": {"game": total_game, "romfs": total_romfs, "romfs_overlay": total_overlay, "shaders": total_shaders},
     }
     if derived is not None:
         manifest["counts"]["derived"] = derived_rows
@@ -149,7 +165,7 @@ def assemble(output, game, romfs, shaders, derived=None, note=None, quiet=False)
 
     written_bytes = 0
     manifest_bytes = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode()
-    expected_bytes = len(manifest_bytes) + total_game + total_romfs + total_shaders + (derived.stat().st_size if derived is not None else 0)
+    expected_bytes = len(manifest_bytes) + total_game + total_romfs + total_overlay + total_shaders + (derived.stat().st_size if derived is not None else 0)
     last_report = [0]
 
     def progress(count):
@@ -174,6 +190,8 @@ def assemble(output, game, romfs, shaders, derived=None, note=None, quiet=False)
             write_entry(archive, game / name, f"game/{name}", progress)
         for path in romfs_files:
             write_entry(archive, path, f"romfs/data/{path.name}", progress)
+        for path in overlay_files:
+            write_entry(archive, path, f"romfs_overlay/{path.relative_to(romfs_overlay).as_posix()}", progress)
         for path in shader_files:
             write_entry(archive, path, f"shaders/{path.name}", progress)
         if derived is not None:
@@ -214,6 +232,8 @@ def main():
     assemble_parser.add_argument("--shaders", type=Path, required=True)
     assemble_parser.add_argument("--derived", type=Path, default=None,
                                  help="runtime table data (derived.tsv) produced by shell_stubs.py data")
+    assemble_parser.add_argument("--romfs-overlay", type=Path, default=None,
+                                 help="generated overlay root containing data/.build.config and one replacement archive")
     assemble_parser.add_argument("--note", default=None)
 
     inspect_parser = subparsers.add_parser("inspect", help="print a package's manifest without touching it")
@@ -222,7 +242,8 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == "assemble":
-            assemble(args.output, args.game, args.romfs, args.shaders, derived=args.derived, note=args.note)
+            assemble(args.output, args.game, args.romfs, args.shaders, derived=args.derived, note=args.note,
+                     romfs_overlay=args.romfs_overlay)
         else:
             manifest, groups = inspect(args.archive)
             print(json.dumps(manifest, indent=2, ensure_ascii=False))

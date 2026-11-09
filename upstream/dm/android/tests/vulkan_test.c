@@ -49,6 +49,28 @@ static void scissor_clip_reference_test(void) {
     r=graphics_scissor_clip((p_scissor){INT32_MAX,INT32_MIN,INT32_MAX,INT32_MAX},64,32);
     assert(r.offset.x==64&&r.offset.y==0&&r.extent.width==0&&r.extent.height==0);
 }
+static void counter_gpu_parameters_reference_test(void) {
+    uint32_t parameters[4]={0};
+    assert(counter_gpu_parameters_for(64,76.923f,parameters));
+    assert(parameters[1]==15&&parameters[2]==64&&parameters[0]!=0);
+    assert(!counter_gpu_parameters_for(0,76.923f,parameters));
+    assert(!counter_gpu_parameters_for(65,76.923f,parameters));
+    assert(!counter_gpu_parameters_for(64,0.0f,parameters));
+}
+static void counter_timestamp_gpu_reference_test(void) {
+    counter_gpu_initialize();
+    if(!counter_gpu_supported){puts("Vulkan timestamp conversion: unsupported device timestamp, GPU path skipped");return;}
+    uint64_t reports[2][2]={{0}},before=counter_gpu_reports;
+    mtl_pool_add(reports,sizeof reports);
+    mtl_sub_begin();
+    mtl_sub_counter((uintptr_t)reports[0],NVN_COUNTER_TYPE_TIMESTAMP);
+    mtl_sub_counter((uintptr_t)reports[1],NVN_COUNTER_TYPE_TIMESTAMP);
+    mtl_sub_commit();
+    mtl_pool_del(reports);
+    assert(counter_gpu_reports==before+2);
+    assert(reports[0][0]==reports[0][1]&&reports[1][0]==reports[1][1]);
+    puts("Vulkan timestamp conversion: encoded GPU reports and ordered publication PASS");
+}
 static void *waiter(void *p) { assert(mtl_wait(*(uint64_t *)p, 1000000000)); return NULL; }
 // 原有像素断言读取提交结果，显式等待；异步回归直接使用真实 commit。
 // Existing pixel assertions consume submission results and explicitly wait; async regressions use the real commit.
@@ -78,6 +100,7 @@ static uint64_t test_sync_commit(void){uint64_t ticket=async_raw_commit();assert
 #include "typed_clear_test.inc"
 int main(void) {
     scissor_clip_reference_test();
+    counter_gpu_parameters_reference_test();
     assert(timestamp_delta(250,5,8)==11);
     assert(timestamp_delta(UINT64_MAX-2,3,64)==6);
     assert(timestamp_delta(12,15,0)==0);
@@ -229,6 +252,7 @@ int main(void) {
     if(getenv("DM_VK_SHADERS")){uniform_arena_reference_test();binding_cache_reference_test();depth_range_reference_test();dependencies_reference_test();sampler_reference_test();shadow_array_reference_test();handle_decode_reference_test();batch_resources_reference_test();query_readback_reference_test();}
     async_reference_test();forward_reference_test();pending_index_reference_test();if(getenv("DM_VK_SHADERS")){forward_binding_reference_test();texel_forward_reference_test();readback_dependency_reference_test();guest_publish_reference_test();index_reference_test();packaged_texture_reference_test();packaged_subresources_reference_test();known_copy_snapshot_reference_test();}
     typed_clear_reference_test();
+    counter_timestamp_gpu_reference_test();
     assert(pending_index_oracle_queries&&pending_index_oracle_nodes);
     printf("Vulkan pending index: %llu real query/old-chain equivalence checks, old chain nodes=%llu index tree nodes=%llu, all commit registration audits PASS (diagnostic suite, not game FPS)\n",(unsigned long long)pending_index_oracle_queries,(unsigned long long)pending_index_oracle_nodes,(unsigned long long)(pending_index_nodes[0]+pending_index_nodes[1]));
     assert(fence_wait_total_ns>0);

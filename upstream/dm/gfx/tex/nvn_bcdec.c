@@ -5,6 +5,9 @@
 #include "../../third_party/bcdec/bcdec.h"
 #include "nvn_bcdec.h"
 #include <string.h>
+#ifdef __ANDROID__
+#include <pthread.h>
+#endif
 
 enum { R8Unorm = 10, R8Snorm = 12, RG8Unorm = 30, RG8Snorm = 32, RGBA8Unorm = 70, RGBA8Unorm_sRGB = 71, RGBA16Float = 115 };
 // NVN：0x41 RGB_DXT1、0x42 RGBA_DXT1、0x43 DXT3、0x44 DXT5、0x45–0x48 同上 sRGB、0x49 / 0x4a BC4 无 / 有符号、0x4b / 0x4c BC5、0x4d / 0x4e BC7（sRGB）、0x4f / 0x50 BC6H 有 / 无符号
@@ -42,17 +45,78 @@ static void block(uint32_t f, const uint8_t *b, uint8_t *o, int op) {   // 一�
     }
 }
 
-int nvn_bc_decode(uint32_t f, const uint8_t *src, size_t pitch, uint32_t w, uint32_t h, uint8_t *dst, size_t dpitch) {
-    uint32_t pf; int bpp; if (!nvn_bc_unpacked(f, &pf, &bpp)) return -1;
-    int bb = (f == 0x41 || f == 0x42 || f == 0x45 || f == 0x46 || f == 0x49 || f == 0x4a) ? 8 : 16;   // 每块字节 | bytes per block
+typedef struct bc_decode_task {
+    uint32_t format, width, height, bytes_per_pixel, first_block_row, end_block_row;
+    const uint8_t *source;
+    size_t source_pitch, destination_pitch;
+    uint8_t *destination;
+} bc_decode_task;
+
+static void bc_decode_rows(const bc_decode_task *task) {
+    uint32_t bpp = task->bytes_per_pixel;
+    uint32_t block_bytes = (task->format == 0x41 || task->format == 0x42 ||
+                            task->format == 0x45 || task->format == 0x46 ||
+                            task->format == 0x49 || task->format == 0x4a) ? 8 : 16;
     uint8_t tmp[4 * 4 * 8];
-    for (uint32_t by = 0; by * 4 < h; by++) for (uint32_t bx = 0; bx * 4 < w; bx++) {
-        const uint8_t *b = src + by * pitch + bx * bb;
-        uint32_t cw = w - bx * 4 < 4 ? w - bx * 4 : 4, ch = h - by * 4 < 4 ? h - by * 4 : 4;
-        uint8_t *o = dst + (size_t)by * 4 * dpitch + (size_t)bx * 4 * bpp;
-        if (cw == 4 && ch == 4) { block(f, b, o, (int)dpitch); continue; }
-        block(f, b, tmp, 4 * bpp);   // 边上不满 4×4 的块：先解到临时块再拷需要的部分 | blocks at the edge that are not a full 4×4: decode into a temporary block first, then copy the needed part
-        for (uint32_t y = 0; y < ch; y++) memcpy(o + y * dpitch, tmp + y * 4 * bpp, cw * bpp);
+    for (uint32_t by = task->first_block_row; by < task->end_block_row; by++) {
+        for (uint32_t bx = 0; bx < task->width / 4 + (task->width % 4 != 0); bx++) {
+            const uint8_t *b = task->source + (size_t)by * task->source_pitch +
+                               (size_t)bx * block_bytes;
+            uint32_t cw = task->width - bx * 4 < 4 ? task->width - bx * 4 : 4;
+            uint32_t ch = task->height - by * 4 < 4 ? task->height - by * 4 : 4;
+            uint8_t *o = task->destination + (size_t)by * 4 * task->destination_pitch +
+                         (size_t)bx * 4 * bpp;
+            if (cw == 4 && ch == 4) {
+                block(task->format, b, o, (int)task->destination_pitch);
+                continue;
+            }
+            block(task->format, b, tmp, 4 * (int)bpp);
+            for (uint32_t y = 0; y < ch; y++)
+                memcpy(o + y * task->destination_pitch, tmp + y * 4 * bpp, cw * bpp);
+        }
     }
+}
+
+#ifdef __ANDROID__
+static void *bc_decode_worker(void *argument) {
+    bc_decode_rows(argument);
+    return NULL;
+}
+#endif
+
+int nvn_bc_decode(uint32_t f, const uint8_t *src, size_t pitch, uint32_t w, uint32_t h,
+                  uint8_t *dst, size_t dpitch) {
+    uint32_t pf;
+    int bpp;
+    if (!nvn_bc_unpacked(f, &pf, &bpp)) return -1;
+    uint32_t block_rows = h / 4 + (h % 4 != 0);
+    bc_decode_task task = {
+        .format = f, .width = w, .height = h, .bytes_per_pixel = (uint32_t)bpp,
+        .first_block_row = 0, .end_block_row = block_rows,
+        .source = src, .source_pitch = pitch, .destination_pitch = dpitch, .destination = dst,
+    };
+#ifdef __ANDROID__
+    // Match hakuX's multi-threaded S3TC fallback without paying thread startup for small assets.
+    // BC work is independent by block row; split only large uploads and retain serial fallback
+    // if Android cannot create a worker.
+    if (block_rows >= 16 && pitch && block_rows > 65536 / pitch) {
+        pthread_t threads[3];
+        bc_decode_task tasks[4];
+        unsigned started = 0;
+        for (unsigned i = 0; i < 4; i++) {
+            tasks[i] = task;
+            tasks[i].first_block_row = (uint64_t)block_rows * i / 4;
+            tasks[i].end_block_row = (uint64_t)block_rows * (i + 1) / 4;
+            if (i && pthread_create(&threads[started], NULL, bc_decode_worker, &tasks[i]) == 0)
+                started++;
+            else if (i)
+                bc_decode_rows(&tasks[i]);
+        }
+        bc_decode_rows(&tasks[0]);
+        for (unsigned i = 0; i < started; i++) pthread_join(threads[i], NULL);
+        return 0;
+    }
+#endif
+    bc_decode_rows(&task);
     return 0;
 }

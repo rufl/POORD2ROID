@@ -99,17 +99,18 @@ static VkDescriptorBufferInfo uniform_read_cached_read(uintptr_t address,uint32_
     dm_cpu_phase_end(DM_CPU_PHASE_UBO_ARENA,arena_phase);
     return info;
 }
-static void descriptor_payload_build(const VkWriteDescriptorSet *writes,unsigned count) {
-    size_t words=0;for(unsigned i=0;i<count;i++){VkDescriptorType type=writes[i].descriptorType;words+=2+writes[i].descriptorCount*((type==VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER||type==VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER)?1:3);}
+static void descriptor_payload_build(const shader_entry *shader,const VkWriteDescriptorSet *writes) {
+    // The immutable binding plan already counted each descriptor type; reuse it instead of rescanning writes for size.
+    size_t words=2u*(size_t)shader->count+3u*((size_t)shader->buffer_count+shader->image_count)+shader->texel_count;
     if(words>descriptor_payload_capacity){descriptor_payload=realloc(descriptor_payload,words*sizeof *descriptor_payload);if(!descriptor_payload)die("Vulkan descriptor payload allocation");descriptor_payload_capacity=words;}
-    size_t cursor=0;for(unsigned i=0;i<count;i++){const VkWriteDescriptorSet *w=&writes[i];descriptor_payload[cursor++]=((uint64_t)w->descriptorType<<32)|w->dstBinding;descriptor_payload[cursor++]=w->descriptorCount;
+    size_t cursor=0;for(unsigned i=0;i<shader->count;i++){const VkWriteDescriptorSet *w=&writes[i];descriptor_payload[cursor++]=((uint64_t)w->descriptorType<<32)|w->dstBinding;descriptor_payload[cursor++]=w->descriptorCount;
         for(unsigned j=0;j<w->descriptorCount;j++){
             if(descriptor_type_uniform(w->descriptorType)||w->descriptorType==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER){const VkDescriptorBufferInfo *b=&w->pBufferInfo[j];descriptor_payload[cursor++]=(uintptr_t)b->buffer;descriptor_payload[cursor++]=b->offset;descriptor_payload[cursor++]=b->range;}
             else if(w->descriptorType==VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER||w->descriptorType==VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER)descriptor_payload[cursor++]=(uintptr_t)w->pTexelBufferView[j];
             else {const VkDescriptorImageInfo *image=&w->pImageInfo[j];descriptor_payload[cursor++]=(uintptr_t)image->sampler;descriptor_payload[cursor++]=(uintptr_t)image->imageView;descriptor_payload[cursor++]=image->imageLayout;}
         }
     }
-    descriptor_payload_words=cursor;descriptor_payload_hash=14695981039346656037ull;
+    if(cursor!=words)die("Vulkan descriptor payload plan mismatch");descriptor_payload_words=cursor;descriptor_payload_hash=14695981039346656037ull;
     // 显式字段编码，不把 Vulkan 结构体未定义的 padding 当作内容。
     // Encode explicit fields rather than treating unspecified Vulkan structure padding as content.
     for(size_t i=0;i<cursor;i++){descriptor_payload_hash^=descriptor_payload[i];descriptor_payload_hash*=1099511628211ull;}
@@ -117,14 +118,14 @@ static void descriptor_payload_build(const VkWriteDescriptorSet *writes,unsigned
     // Arena offsets share low 64 KiB bits; mix high bits at the end so model versions do not all land in one bucket.
     descriptor_payload_hash^=descriptor_payload_hash>>33;descriptor_payload_hash*=0xff51afd7ed558ccdull;descriptor_payload_hash^=descriptor_payload_hash>>33;
 }
-static VkDescriptorSet descriptor_cache_find_read(VkDescriptorSetLayout layout,const VkWriteDescriptorSet *writes,unsigned count);
-static VkDescriptorSet descriptor_cache_find(VkDescriptorSetLayout layout,const VkWriteDescriptorSet *writes,unsigned count) {
-    uint64_t phase=dm_cpu_phase_begin();VkDescriptorSet set=descriptor_cache_find_read(layout,writes,count);dm_cpu_phase_end(DM_CPU_PHASE_DESCRIPTOR,phase);return set;
+static VkDescriptorSet descriptor_cache_find_read(const shader_entry *shader,const VkWriteDescriptorSet *writes);
+static VkDescriptorSet descriptor_cache_find(const shader_entry *shader,const VkWriteDescriptorSet *writes) {
+    uint64_t phase=dm_cpu_phase_begin();VkDescriptorSet set=descriptor_cache_find_read(shader,writes);dm_cpu_phase_end(DM_CPU_PHASE_DESCRIPTOR,phase);return set;
 }
-static VkDescriptorSet descriptor_cache_find_read(VkDescriptorSetLayout layout,const VkWriteDescriptorSet *writes,unsigned count) {
-    descriptor_payload_build(writes,count);unsigned bucket=(descriptor_payload_hash^(uintptr_t)layout)&2047;
+static VkDescriptorSet descriptor_cache_find_read(const shader_entry *shader,const VkWriteDescriptorSet *writes) {
+    descriptor_payload_build(shader,writes);unsigned bucket=(descriptor_payload_hash^(uintptr_t)shader->layout)&2047;
     for(descriptor_version *entry=descriptor_versions[bucket];entry;entry=entry->next)
-        if(entry->layout==layout&&entry->hash==descriptor_payload_hash&&entry->words==descriptor_payload_words&&(!entry->words||!memcmp(entry->payload,descriptor_payload,entry->words*sizeof *entry->payload))){descriptor_version_hits++;return entry->set;}
+        if(entry->layout==shader->layout&&entry->hash==descriptor_payload_hash&&entry->words==descriptor_payload_words&&(!entry->words||!memcmp(entry->payload,descriptor_payload,entry->words*sizeof *entry->payload))){descriptor_version_hits++;return entry->set;}
     descriptor_version_misses++;return VK_NULL_HANDLE;
 }
 static void descriptor_cache_store(VkDescriptorSetLayout layout,VkDescriptorSet set) {

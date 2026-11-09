@@ -4,11 +4,16 @@
 enum { DM_UISCREEN_OFF, DM_UISCREEN_TOP, DM_UISCREEN_CENTER, DM_UISCREEN_BOTTOM };
 void dm_uiscreen_enable(int mode);           // 前端在「窗口比 16:9 窄」时调：DM_UISCREEN_BOTTOM 等 = 打开，界面矩形（宽 = 画面宽、高 = 宽÷16×9）贴顶 / 居中 / 贴底；DM_UISCREEN_OFF = 关掉并把游戏的值写回。任意线程调，下一帧生效 | Called by the front end when "the window is narrower than 16:9": DM_UISCREEN_BOTTOM etc. = turn on, with the UI rectangle (width = frame width, height = width÷16×9) top-aligned / centered / bottom-aligned; DM_UISCREEN_OFF = turn off and write the game's values back. Callable from any thread, takes effect next frame
 void dm_uiscreen_pump(void);                 // 游戏主线程每帧调：发现游戏重写了「屏幕宽高」全局量（开机、切主机 / 掌机档）就记下真实值并改写成界面用的值——只此一处，不分时机 | Called every frame on the game main thread: on finding that the game rewrote the "screen width / height" globals (boot, switching docked / handheld mode), record the real values and rewrite them to the values the UI uses - this one place only, regardless of occasion
-int dm_screen_real(int *w, int *h);          // 真实画面宽高（3D 出图、命中框用的那个）。返回 0 = 还没读到 | Real frame width and height (the one used by 3D rendering and hit boxes). Returns 0 = not read yet
-void dm_ui_rect(int *x, int *y, int *w, int *h);   // 界面那块矩形在真实画面里的位置（像素）；没打开时 = 整个画面。图形层挪界面绘制、前端摆游戏视图都读它，纵向位置只有这一个来源 | Position of the UI rectangle in the real frame (pixels); when off = the whole frame. The graphics layer shifting the UI draw and the front end placing the game view both read it; it is the only source for the vertical position
-float dm_ui_ny(float ny_real);               // 真实画面归一化纵坐标 → 界面矩形里的归一化纵坐标（横向不变） | Normalized y in the real frame → normalized y within the UI rectangle (horizontal unchanged)
-float dm_ui_ny_back(float ny_ui);            // 反向 | Reverse
-int dm_ui_proj_dy(void);   // 游戏「世界点 → 屏幕」（main+0x1237c60 / 0x90d110）的结果被减掉的纵向像素数（界面矩形的 y；没在减 = 0）。宿主自己调这两个函数要真实画面坐标时加回来 | Number of vertical pixels subtracted from the result of the game's "world point → screen" (main+0x1237c60 / 0x90d110) (the UI rectangle's y; not subtracting = 0). Add it back when the host itself calls these two functions and needs real frame coordinates
+int dm_screen_real(int *w, int *h);          // Real frame dimensions, independent of the UI layout.
+void dm_uiscreen_surface_size(int width, int height);  // Current Vulkan output surface in pixels; supplied by Android window/swapchain.
+void dm_uiscreen_presented_size(int width, int height); // Latest presented source image size (after crop); supplied by Vulkan presenter.
+void dm_ui_screen_to_game(float screen_x, float screen_y, float *game_x, float *game_y); // Surface-normalized input -> displayed game-image normalized coordinates.
+void dm_ui_rect(int *x, int *y, int *w, int *h);   // UI safe rectangle in real-frame pixels.
+float dm_ui_nx(float nx_real);               // Real-frame normalized X -> UI safe-rectangle normalized X.
+float dm_ui_nx_back(float nx_ui);            // UI safe-rectangle normalized X -> real-frame normalized X.
+float dm_ui_ny(float ny_real);               // Real-frame normalized Y -> UI rectangle normalized Y.
+float dm_ui_ny_back(float ny_ui);            // UI rectangle normalized Y -> real-frame normalized Y.
+int dm_ui_proj_dy(void);
 int dm_uiscreen_ingame(void);                // 1 = 局内（真全屏）；0 = 局外（前端各页与读取画面：16:9 居中留边）。唯一信号，任意线程读 | 1 = in a run (true fullscreen); 0 = out of a run (front end pages and loading screen: 16:9 centered with margins). The single signal, readable from any thread
 void dm_uiscreen_set_ingame(int on);          // 只许界面每帧那一处（dm_cursor.c）调 | May only be called from the per-frame UI site (dm_cursor.c)
 void dm_uiscreen_set_panel(int on);           // 局内开着大面板（功能页 / 箱子 / 商人 / 魔盒…，= 触摸前端的面板模式）：界面矩形移到正中；关掉回落前端选的摆法。触摸前端在界面消息回调里调 | A large panel open in a run (function pages / stash / vendor / cube..., = the touch front end's panel mode): the UI rectangle moves to the center; when closed it drops back to the placement the front end chose. Called by the touch front end in the UI message callback

@@ -3,13 +3,19 @@
 #define _GNU_SOURCE
 #include "../../host/dm.h"
 #include "../../host/hle.h"
-#include "../../host/front.h"
 #include "../../host/dm_input.h"
 #include "../../host/dm_i18n.h"
 #include "../../host/dm_hud.h"
+#include "../../host/dm_actions.h"
+#include "../../host/dm_cursor.h"
+#include "../../host/dm_uiscreen.h"
+#include "../../host/dm_uiscreen_geometry.h"
+#include "../../ios/Sources/dm_touch_controls.h"
+#include "../../host/front.h"
 #include "debug_stats.h"
 #include "performance_hint.h"
 #include "launch_settings.h"
+#include "startup_gate.h"
 #include <android/native_activity.h>
 #include <android/native_window.h>
 #include <android/window.h>
@@ -32,6 +38,11 @@ typedef struct {
     int stop; _Atomic int started; _Atomic int activity_resumed;
     uint64_t pad_buttons,hat_buttons,trigger_buttons,move_keys;int tap_a;int32_t lx,ly,rx,ry;
     uint64_t touch_buttons;int32_t touch_lx,touch_ly,touch_rx,touch_ry;
+    dm_tc_layout touch_layout;int touch_layout_w,touch_layout_h;
+    int ui_touch_id,ui_touch_active,ui_touch_pending,ui_touch_started,ui_touch_tab;
+    unsigned ui_touch_query;float ui_touch_x,ui_touch_y,ui_touch_now_x,ui_touch_now_y;
+    int hud_touch_id,hud_touch_hit,hud_touch_active;
+    uint64_t hud_touch_button;float hud_touch_x,hud_touch_y;
     uint64_t pad_prev_b;dm_pad_mode_state pad_state;
     pthread_t debug_thread;int debug_started;_Atomic int debug_stop;
     float requested_frame_rate;int frame_rate_attempted;
@@ -42,16 +53,9 @@ static game_app *application;
 //   · 手柄按下任何键 / 把摇杆推过 25% → 手柄模式：屏幕虚拟手柄隐藏，实体手柄接管；
 //   · 碰了游戏画面 → 触屏模式：虚拟手柄显示，实体手柄的摇杆不交给游戏；
 //   · 碰过屏幕后，摇杆要先回中再推出来才重新接管（漂移大的手柄不会来回切）；按键随时接管。
-// 安卓这端的"触屏界面"是 Java 画的屏幕虚拟手柄，不是 ROM 里的触屏布局（安卓没装触屏布局覆盖层，
-// ROM 一直是原版手柄界面），所以这里切的是：屏幕虚拟手柄显隐 + 实体手柄的摇杆交不交给游戏。
-// The controller / touch takeover (same semantics as the iOS front end; the rules live in the pure functions of
-// dm_input.h so both ends share one copy).
-//   - Controller: any button press or a stick pushed past 25% -> controller mode: the on-screen controls hide;
-//   - the game screen is touched -> touch mode: the on-screen controls show and the controller sticks are not handed to the game;
-//   - after a screen touch, a stick has to recentre before it takes over again; buttons always take over.
-// On Android the "touch UI" is the on-screen controls drawn by Java, not a touch layout in the ROM (Android ships no
-// touch layout overlay, so the ROM stays on the original controller layout), so what switches here is the on-screen
-// controls' visibility and whether the controller sticks reach the game.
+// Android combines Java virtual controls with native screen-touch handling: menus/panels use the game's classified
+// UI mouse path; gameplay uses the shared touch-control geometry for skill and belt zones.
+// Controller takeover still controls Java virtual-control visibility and physical-stick routing.
 static _Atomic int g_pad_mode;   // 1 = 手柄模式，0 = 触屏模式 | 1 = controller mode, 0 = touch mode
 void dm_padmode_request(int pad);   // 宿主 dm_padmode.c：布局换成原版手柄版 / 触屏版 | Host dm_padmode.c: switch the layouts
 static _Atomic int display_hz;
@@ -231,7 +235,12 @@ static void copy_asset(ANativeActivity *a,const char *directory,const char *name
     char buffer[4096];int n;while((n=AAsset_read(asset,buffer,sizeof buffer))>0)if(fwrite(buffer,1,n,file)!=(size_t)n)die("Game metadata write");fclose(file);AAsset_close(asset);
 }
 static void *boot(void *argument) {
-    game_app *s=argument;pthread_mutex_lock(&s->lock);while(!s->window&&!s->stop)pthread_cond_wait(&s->ready,&s->lock);int stop=s->stop;pthread_mutex_unlock(&s->lock);if(stop)return NULL;
+    game_app *s=argument;pthread_mutex_lock(&s->lock);
+    while(!dm_android_startup_ready(s->window!=NULL,atomic_load(&s->activity_resumed))&&!s->stop)pthread_cond_wait(&s->ready,&s->lock);
+    int stop=s->stop;int window_ready=s->window!=NULL;int resumed=atomic_load(&s->activity_resumed);
+    pthread_mutex_unlock(&s->lock);
+    if(stop)return NULL;
+    __android_log_print(ANDROID_LOG_INFO,"D2RAndroid","[android-startup] foreground gate passed window=%d resumed=%d",window_ready,resumed);
     char path[1024],metadata[1024],log[1024];snprintf(metadata,sizeof metadata,"%s/game",s->activity->internalDataPath);mkdir(metadata,0700);
     snprintf(log,sizeof log,"%s/game.log",s->activity->internalDataPath);int fd=open(log,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0600);if(fd>=0){dup2(fd,STDERR_FILENO);dup2(fd,STDOUT_FILENO);close(fd);}
     // ART 查询只在游戏开跑前的真实宿主 pthread 上进行；失败保留0，不伪造屏幕信息。
@@ -263,6 +272,12 @@ static void *boot(void *argument) {
         // /storage/emulated) and dlopen from there fails. The bulk assets stay external, where the gigabytes fit.
         snprintf(metadata,sizeof metadata,"%s/d2r-package/game",s->activity->internalDataPath);mkdir(metadata,0700);
         snprintf(path,sizeof path,"%s/d2r-package/romfs",s->activity->externalDataPath);setenv("DM_ROMFS",path,1);
+        int overlay_config_length=snprintf(path,sizeof path,"%s/d2r-package/romfs_overlay/data/.build.config",s->activity->externalDataPath);
+        if(overlay_config_length>0&&(size_t)overlay_config_length<sizeof path&&access(path,R_OK)==0){
+            int overlay_length=snprintf(path,sizeof path,"%s/d2r-package/romfs_overlay",s->activity->externalDataPath);
+            if(overlay_length>0&&(size_t)overlay_length<sizeof path){setenv("DM_ROMFS_OVERLAY",path,1);LOG("[android] imported RomFS overlay enabled: %s",path);}
+            else unsetenv("DM_ROMFS_OVERLAY");
+        }else{unsetenv("DM_ROMFS_OVERLAY");LOG("[android] no imported RomFS overlay; using original game layouts");}
         snprintf(path,sizeof path,"%s/d2r-package/shaders",s->activity->externalDataPath);setenv("DM_VK_SHADERS",path,1);
         // 模块目录单独一个变量：DM_ANDROID_LIBDIR 归图形驱动找 hook 库用，见 loader.c 的说明。
         // A separate variable for the module directory: DM_ANDROID_LIBDIR belongs to the graphics driver's hook
@@ -281,6 +296,7 @@ static void *boot(void *argument) {
         const char *modules[]={"main","sdk","subsdk0"};for(unsigned i=0;i<3;i++)for(unsigned j=0;j<2;j++){char name[80];snprintf(name,sizeof name,"%s.%s.tsv",modules[i],j?"gates":"fixups");copy_asset(s->activity,metadata,name);}
         snprintf(path,sizeof path,"%s/romfs",s->activity->externalDataPath);setenv("DM_ROMFS",path,1);
         snprintf(path,sizeof path,"%s/shaders",s->activity->externalDataPath);setenv("DM_VK_SHADERS",path,1);
+        unsetenv("DM_ROMFS_OVERLAY");
         unsetenv("DM_GUEST_LIBDIR");
         unsetenv("DM_DERIVED");
         LOG("[android] no imported package; using APK assets and pushed romfs/shaders (derived tables will be empty)");
@@ -359,8 +375,9 @@ uint64_t front_game_res(int docked) {
     // Log the first three calls: the resolution must be decided at startup (the game builds its window texture from
     // the startup parameter slot), and if the first ask happens before the launch settings take effect, only the
     // first line would hide that — when it goes wrong this shows what was actually read at that moment.
-    if(reported<3){reported++;LOG("[android] 出图档位=%s DM_GAME_RES=%s → 主机档 %ux%u / 掌机档 %ux%u (第%d次)",docked?"主机":"掌机",e&&*e?e:"(未设)",w,h,(w*4/5+3)/4*4,h*4/5,reported);}
-    return docked?((uint64_t)h<<32)|w:((uint64_t)(h*4/5)<<32)|(((w*4/5)+3)/4*4);
+    int handheld_w,handheld_h;dm_ui_handheld_size((int)w,(int)h,&handheld_w,&handheld_h);
+    if(reported<3){reported++;LOG("[android] 出图档位=%s DM_GAME_RES=%s → 主机档 %ux%u / 掌机档 %ux%u (第%d次)",docked?"主机":"掌机",e&&*e?e:"(未设)",w,h,handheld_w,handheld_h,reported);}
+    return docked?((uint64_t)h<<32)|w:((uint64_t)handheld_h<<32)|(uint32_t)handheld_w;
 }
 static int text_input_request(const char *title,const char *sub,const char *guide,const char *initial,int max,char *out,int cap) {
     if(!application||!out||cap<=0)return -1;ANativeActivity *a=application->activity;JNIEnv *env=NULL;int attached=0;
@@ -475,6 +492,139 @@ static void pad_publish(game_app *s) {
 }
 static void pad_clear(game_app *s) {s->pad_buttons=s->hat_buttons=s->trigger_buttons=s->move_keys=s->touch_buttons=0;s->tap_a=0;s->lx=s->ly=s->rx=s->ry=s->touch_lx=s->touch_ly=s->touch_rx=s->touch_ry=0;s->pad_prev_b=0;pad_publish(s);}
 static int32_t touch_axis(jint value) {return value>DM_STICK_MAX?DM_STICK_MAX:value< -DM_STICK_MAX?-DM_STICK_MAX:value;}
+static void touch_layout_update(game_app *s,int width,int height) {
+    if(width<=0||height<=0||(s->touch_layout_w==width&&s->touch_layout_h==height))return;
+    dm_tc_set_tall_scale(1);
+    dm_tc_layout_make(&s->touch_layout,(float)width,(float)height);
+    s->touch_layout_w=width;s->touch_layout_h=height;
+}
+static int touch_ui_mode(void) {
+    return !dm_uiscreen_ingame()||dm_ui_free_cursor()||dm_ui_panel_state()!=0;
+}
+static uint64_t touch_hud_button(int hit) {
+    switch(hit){
+        case DM_TC_MAIN:return DM_BTN_A;
+        case DM_TC_SKILL1:return DM_BTN_B;
+        case DM_TC_SKILL2:return DM_BTN_X;
+        case DM_TC_SKILL3:return DM_BTN_Y;
+        case DM_TC_SKILL4:return DM_BTN_R;
+        default:return 0;
+    }
+}
+static int touch_belt_cell(game_app *s,float x,float y,int *col,int *row) {
+    int hit=dm_tc_hit(&s->touch_layout,x,y);
+    if(hit>=DM_TC_BELT1&&hit<=DM_TC_BELT4){*col=hit-DM_TC_BELT1;*row=0;return 1;}
+    int expanded=0,rows=dm_belt_rows(&expanded);
+    if(!expanded||rows<=1)return 0;
+    float u=s->touch_layout.height/1320.0f;
+    for(int r=1;r<rows&&r<4;r++)for(int c=0;c<4;c++){
+        const dm_tc_target *t=&s->touch_layout.target[DM_TC_BELT1+c];
+        if(fabsf(x-t->x)<=60*u&&fabsf(y-(t->y-(165.0f+162.0f*(r-1))*u))<=53.75f*u){*col=c;*row=r;return 1;}
+    }
+    return 0;
+}
+static int android_touch_input(game_app *s,AInputEvent *event,int width,int height) {
+    int raw=AMotionEvent_getAction(event),action=raw&AMOTION_EVENT_ACTION_MASK;
+    unsigned ix=(raw&AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)>>AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
+    int down=action==AMOTION_EVENT_ACTION_DOWN||action==AMOTION_EVENT_ACTION_POINTER_DOWN;
+    int up=action==AMOTION_EVENT_ACTION_UP||action==AMOTION_EVENT_ACTION_POINTER_UP;
+    int cancel=action==AMOTION_EVENT_ACTION_CANCEL;
+    if(cancel) {
+        int consumed=s->ui_touch_active||s->hud_touch_active;
+        if(s->ui_touch_active)dm_ui_touch(3,0,0);
+        s->ui_touch_active=s->hud_touch_active=0;s->touch_buttons=0;s->touch_rx=s->touch_ry=0;
+        s->tap_a=0;pad_publish(s);return consumed;
+    }
+    int index=down||up?(int)ix:0;
+    if(action==AMOTION_EVENT_ACTION_MOVE&&(s->ui_touch_active||s->hud_touch_active)) {
+        int active_id=s->ui_touch_active?s->ui_touch_id:s->hud_touch_id;
+        for(unsigned i=0;i<AMotionEvent_getPointerCount(event);i++)
+            if(AMotionEvent_getPointerId(event,i)==active_id){index=(int)i;break;}
+    }
+    int id=AMotionEvent_getPointerId(event,index);
+    float x=AMotionEvent_getX(event,index),y=AMotionEvent_getY(event,index);
+    float nx=x/width,ny=y/height,game_nx,game_ny;
+    dm_ui_screen_to_game(nx,ny,&game_nx,&game_ny);
+    int consumed=0;
+    if(s->ui_touch_active) {
+        if(id==s->ui_touch_id) {
+            s->ui_touch_now_x=game_nx;s->ui_touch_now_y=game_ny;
+            if(s->ui_touch_pending) {
+                int result=dm_ui_item_result(s->ui_touch_query);
+                if(result>=0) {
+                    s->ui_touch_pending=0;
+                    if(result==2) {
+                        dm_ui_touch(3,game_nx,game_ny);s->ui_touch_tab=1;
+                        if(up){dm_ui_tab_go();s->ui_touch_tab=0;}
+                    } else if(result!=3&&result!=6&&result!=10) {
+                        dm_ui_touch(0,s->ui_touch_x,s->ui_touch_y);
+                        s->ui_touch_started=1;
+                        if(!up)dm_ui_touch(1,game_nx,game_ny);
+                        else {dm_ui_touch(2,game_nx,game_ny);s->ui_touch_started=0;}
+                    }
+                }
+            } else if(s->ui_touch_started) {
+                dm_ui_touch(up?2:1,game_nx,game_ny);
+                if(up)s->ui_touch_started=0;
+            } else if(up&&s->ui_touch_tab) {
+                dm_ui_tab_go();s->ui_touch_tab=0;
+            }
+            if(up){s->ui_touch_active=0;s->ui_touch_pending=0;s->ui_touch_started=0;s->ui_touch_tab=0;}
+            consumed=1;
+        }
+    } else if(s->hud_touch_active) {
+        if(id==s->hud_touch_id) {
+            if(up) {
+                int hit=s->hud_touch_hit;
+                if(hit>=DM_TC_BELT1&&hit<DM_TC_BELT1+16) {
+                    float dx=x-s->hud_touch_x,dy=y-s->hud_touch_y;
+                    float threshold=DM_TC_BELT_SWIPE_PT*dm_tc_scale_for_size((float)width,(float)height);
+                    int expanded=0,rows=dm_belt_rows(&expanded),cell=hit-DM_TC_BELT1,col=cell&3,row=cell>>2;
+                    if(row>0)dm_belt_use(col,row);
+                    else if(rows>1&&dy < -threshold)dm_belt_expand(1);
+                    else if(rows>1&&dy > threshold)dm_belt_expand(0);
+                    else if(fabsf(dx)<=threshold&&fabsf(dy)<=threshold)dm_belt_use(col,0);
+                } else { s->touch_buttons=0;s->touch_rx=s->touch_ry=0; }
+                s->hud_touch_active=0;s->hud_touch_button=0;
+            } else if(s->hud_touch_button) {
+                float radius=60.0f*dm_tc_scale_for_size((float)width,(float)height);
+                float dx=x-s->hud_touch_x,dy=s->hud_touch_y-y;
+                s->touch_rx=(int32_t)lroundf(fmaxf(-1.0f,fminf(1.0f,dx/radius))*DM_STICK_MAX);
+                s->touch_ry=(int32_t)lroundf(fmaxf(-1.0f,fminf(1.0f,dy/radius))*DM_STICK_MAX);
+            }
+            consumed=1;pad_publish(s);
+        }
+    } else if(down&&touch_ui_mode()) {
+        s->ui_touch_id=id;s->ui_touch_active=1;
+        if(dm_uiscreen_ingame()) {
+            s->ui_touch_x=game_nx;s->ui_touch_y=game_ny;
+            s->ui_touch_query=dm_ui_item_query(game_nx,game_ny);
+            s->ui_touch_pending=1;
+        } else dm_ui_touch(0,game_nx,game_ny),s->ui_touch_started=1;
+        s->tap_a=0;consumed=1;
+    } else if(down) {
+        touch_layout_update(s,width,height);
+        int hit=dm_tc_hit(&s->touch_layout,x,y),col=-1,row=-1;
+        uint64_t button=touch_hud_button(hit);
+        if(button) {
+            s->hud_touch_id=id;s->hud_touch_hit=hit;s->hud_touch_button=button;
+            s->hud_touch_x=x;s->hud_touch_y=y;s->hud_touch_active=1;
+            s->touch_buttons=button;s->touch_rx=s->touch_ry=0;
+            pad_publish(s);consumed=1;
+        } else if(touch_belt_cell(s,x,y,&col,&row)) {
+            s->hud_touch_id=id;s->hud_touch_hit=DM_TC_BELT1+col+row*4;
+            s->hud_touch_button=0;s->hud_touch_x=x;s->hud_touch_y=y;s->hud_touch_active=1;
+            s->touch_buttons=0;pad_publish(s);consumed=1;
+        }
+    }
+    if(down||up)pad_touched(s);
+    if(!consumed) {
+        if(action==AMOTION_EVENT_ACTION_DOWN)s->tap_a=1;
+        else if(action==AMOTION_EVENT_ACTION_UP||cancel)s->tap_a=0;
+    } else if(down||up)s->tap_a=0;
+    pad_publish(s);
+    return consumed;
+}
 // 游戏内菜单的两项运行时开关。注意命名方向：Java 侧的 setDebugOverlay 是 native → Java（通知显隐），
 // 这两个是 Java → native（菜单点了要改状态），所以名字不同。
 // Two runtime switches for the in-game menu. Mind the direction: on the Java side setDebugOverlay runs native ->
@@ -590,17 +740,14 @@ static int input_ready(int fd,int events,void *data) {
             pad_publish(s);handled=1;
         }else if(is_motion){int raw_action=AMotionEvent_getAction(event),action=raw_action&AMOTION_EVENT_ACTION_MASK;unsigned lifted=(raw_action&AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)>>AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;dm_touch touches[16];int count=0;
             pthread_mutex_lock(&s->lock);ANativeWindow *window=s->window;int w=window?ANativeWindow_getWidth(window):1,h=window?ANativeWindow_getHeight(window):1;pthread_mutex_unlock(&s->lock);
-            float gw=w,gh=w*9.f/16.f;if(gh>h){gh=h;gw=h*16.f/9.f;}float left=(w-gw)/2,top=(h-gh)/2;
-            if(action!=AMOTION_EVENT_ACTION_UP&&action!=AMOTION_EVENT_ACTION_CANCEL)for(unsigned i=0;i<AMotionEvent_getPointerCount(event)&&count<16;i++){if(action==AMOTION_EVENT_ACTION_POINTER_UP&&i==lifted)continue;float x=(AMotionEvent_getX(event,i)-left)/gw,y=(AMotionEvent_getY(event,i)-top)/gh;if(x>=0&&x<1&&y>=0&&y<1)touches[count++]=(dm_touch){AMotionEvent_getPointerId(event,i)&15,x,y};}
+            if(action!=AMOTION_EVENT_ACTION_UP&&action!=AMOTION_EVENT_ACTION_CANCEL)for(unsigned i=0;i<AMotionEvent_getPointerCount(event)&&count<16;i++){float x=AMotionEvent_getX(event,i)/w,y=AMotionEvent_getY(event,i)/h,gx,gy;dm_ui_screen_to_game(x,y,&gx,&gy);if(gx>=0&&gx<1&&gy>=0&&gy<1)touches[count++]=(dm_touch){AMotionEvent_getPointerId(event,i)&15,gx,gy};}
             dm_touch_set(touches,count);
             // 碰了游戏画面 → 触屏模式（屏幕虚拟手柄回来）。屏幕虚拟手柄自己的触摸在 Java 那边消费，不走这里，
             // 所以玩家用虚拟手柄时模式不变（本来就在触屏模式）。
             // The game screen was touched -> touch mode (the on-screen controls come back). The on-screen controls' own
             // touches are consumed by Java and never reach here, so using them keeps the mode as it is.
-            if(action==AMOTION_EVENT_ACTION_DOWN||action==AMOTION_EVENT_ACTION_POINTER_DOWN)pad_touched(s);
-            // 首画面阶段：点击可确认标题/提示；按下沿由 HLE 锁存，不丢短按。
-            // First-frame controls: taps confirm title/prompts; HLE latches press edges so short taps are retained.
-            if(action==AMOTION_EVENT_ACTION_DOWN)s->tap_a=1;else if(action==AMOTION_EVENT_ACTION_UP||action==AMOTION_EVENT_ACTION_CANCEL)s->tap_a=0;pad_publish(s);handled=1;
+            // UI panels use the shared native mouse path; HUD targets use touch-aligned skill/potion actions.
+            android_touch_input(s,event,w,h);pad_publish(s);handled=1;
         }else if(AInputEvent_getType(event)==AINPUT_EVENT_TYPE_KEY){int key=AKeyEvent_getKeyCode(event),down=AKeyEvent_getAction(event)==AKEY_EVENT_ACTION_DOWN;uint64_t button=pad_key(key),move=key==AKEYCODE_W?DM_BTN_UP:key==AKEYCODE_A?DM_BTN_LEFT:key==AKEYCODE_S?DM_BTN_DOWN:key==AKEYCODE_D?DM_BTN_RIGHT:0;
             if(button){uint64_t before=s->pad_buttons;if(down)s->pad_buttons|=button;else s->pad_buttons&=~button;handled=1;
                 // 手柄来源的判定：**键码优先**。键盘根本没有 BUTTON_* 与 DPAD_* 这些键码，所以它们本身就说明
@@ -652,7 +799,8 @@ static void settle_save(void) {
     if(last!=c0&&asked)LOG("[android] 退出前等游戏存盘 %.0f ms，期间存档提交 %llu 次%s",(now_ns()-t0)/1e6,(unsigned long long)(last-c0),paused?"（原先停在暂停菜单/面板，已放开）":"");
     else LOG("[android] 【红】未存盘退出：3 秒内没等到存档提交（%s%s）",asked?"已请游戏存盘":"不处于可请存盘的状态",paused?"，原先暂停着、已放开":"");
 }
-static void window_created(ANativeActivity *a,ANativeWindow *w) {game_app *s=a->instance;pthread_mutex_lock(&s->lock);ANativeWindow_acquire(w);s->window=w;s->frame_rate_attempted=0;s->swapchain_width=ANativeWindow_getWidth(w);s->swapchain_height=ANativeWindow_getHeight(w);pthread_cond_signal(&s->ready);pthread_mutex_unlock(&s->lock);
+static void window_created(ANativeActivity *a,ANativeWindow *w) {game_app *s=a->instance;pthread_mutex_lock(&s->lock);ANativeWindow_acquire(w);s->window=w;s->frame_rate_attempted=0;s->swapchain_width=ANativeWindow_getWidth(w);s->swapchain_height=ANativeWindow_getHeight(w);pthread_cond_broadcast(&s->ready);int resumed=atomic_load(&s->activity_resumed);int width=s->swapchain_width,height=s->swapchain_height;pthread_mutex_unlock(&s->lock);
+    LOG("[android-startup] native window created extent=%dx%d resumed=%d",width,height,resumed);
     // 游戏已在跑时这块窗口是"从后台回来"的新窗口：挂起期间重建表面与交换链（此刻游戏线程被挡在 NVN 入口外，不会争）。
     // When the game is already running this is the new window from returning to the foreground: rebuild the surface
     // and swapchain while graphics are suspended, when the game thread is parked outside NVN and cannot contend.
@@ -742,8 +890,8 @@ static void input_destroyed(ANativeActivity *a,AInputQueue *q) {game_app *s=a->i
 // first seconds back are recovery (surface rebuild, cold caches), and without telling the controller they are read
 // as GPU pressure and the internal 3D ratio is scaled down; ② lifting the guest clock freeze, pairing with the
 // freeze taken when going to the background.
-static void resumed(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->activity_resumed,1);dm_android_performance_resume();if(atomic_load(&s->started)){dm_3d_scale_resumed();dm_gfx_suspend(0);guest_clock_freeze_for(1,0);dm_audio_suspend(0);dm_focus_set(1);}}
-static void paused(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->activity_resumed,0);dm_touch_set(NULL,0);pad_clear(s);if(atomic_load(&s->started)){dm_focus_set(3);dm_audio_suspend(1);}dm_android_performance_close();}
+static void resumed(ANativeActivity *a) {game_app *s=a->instance;pthread_mutex_lock(&s->lock);atomic_store(&s->activity_resumed,1);pthread_cond_broadcast(&s->ready);pthread_mutex_unlock(&s->lock);LOG("[android-startup] activity resumed started=%d",atomic_load(&s->started));dm_android_performance_resume();if(atomic_load(&s->started)){dm_3d_scale_resumed();dm_gfx_suspend(0);guest_clock_freeze_for(1,0);dm_audio_suspend(0);dm_focus_set(1);}}
+static void paused(ANativeActivity *a) {game_app *s=a->instance;pthread_mutex_lock(&s->lock);atomic_store(&s->activity_resumed,0);pthread_cond_broadcast(&s->ready);pthread_mutex_unlock(&s->lock);LOG("[android-startup] activity paused started=%d",atomic_load(&s->started));dm_touch_set(NULL,0);pad_clear(s);if(atomic_load(&s->started)){dm_focus_set(3);dm_audio_suspend(1);}dm_android_performance_close();}
 static void destroyed(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->debug_stop,1);
     // 请存盘只做一次：正常退出时 window_destroyed 一定先跑过（安卓在 Activity 停止时必然先销毁窗口），而且那时
     // 图形还没挂起、游戏跑得动，提交等得到。走到这里图形已经挂起，再请一次根本等不到提交，只会白等 3 秒再打一条
@@ -770,8 +918,18 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
         {"setMenuOpen","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setMenuOpen},
         {"setSkipSaveOnExit","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setSkipSaveOnExit}
     };
-    if((*a->env)->RegisterNatives(a->env,klass,methods,sizeof methods/sizeof methods[0])!=JNI_OK){(*a->env)->ExceptionDescribe(a->env);(*a->env)->ExceptionClear(a->env);ANativeActivity_finish(a);return;}(*a->env)->DeleteLocalRef(a->env,klass);
-    (void)saved;(void)bytes;game_app *s=calloc(1,sizeof *s);if(!s){ANativeActivity_finish(a);return;}s->activity=a;a->instance=s;application=s;pthread_mutex_init(&s->lock,NULL);pthread_cond_init(&s->ready,NULL);
+    if((*a->env)->RegisterNatives(a->env,klass,methods,sizeof methods/sizeof methods[0])!=JNI_OK){
+        __android_log_print(ANDROID_LOG_ERROR,"D2RAndroid","[android-startup] JNI callback registration failed");
+        (*a->env)->ExceptionDescribe(a->env);(*a->env)->ExceptionClear(a->env);ANativeActivity_finish(a);return;
+    }
+    (*a->env)->DeleteLocalRef(a->env,klass);
+    (void)saved;(void)bytes;game_app *s=calloc(1,sizeof *s);
+    if(!s){__android_log_print(ANDROID_LOG_ERROR,"D2RAndroid","[android-startup] native state allocation failed");ANativeActivity_finish(a);return;}
+    s->activity=a;a->instance=s;application=s;pthread_mutex_init(&s->lock,NULL);pthread_cond_init(&s->ready,NULL);
     a->callbacks->onNativeWindowCreated=window_created;a->callbacks->onNativeWindowResized=window_resized;a->callbacks->onNativeWindowDestroyed=window_destroyed;a->callbacks->onInputQueueCreated=input_created;a->callbacks->onInputQueueDestroyed=input_destroyed;a->callbacks->onPause=paused;a->callbacks->onResume=resumed;a->callbacks->onDestroy=destroyed;
-    ANativeActivity_setWindowFlags(a,AWINDOW_FLAG_FULLSCREEN|AWINDOW_FLAG_KEEP_SCREEN_ON,0);pthread_attr_t attr;pthread_attr_init(&attr);pthread_attr_setstacksize(&attr,64u<<20);int error=pthread_create(&s->worker,&attr,boot,s);pthread_attr_destroy(&attr);if(error)ANativeActivity_finish(a);
+    ANativeActivity_setWindowFlags(a,AWINDOW_FLAG_FULLSCREEN|AWINDOW_FLAG_KEEP_SCREEN_ON,0);
+    __android_log_print(ANDROID_LOG_INFO,"D2RAndroid","[android-startup] native activity created; waiting for resumed activity and window");
+    pthread_attr_t attr;pthread_attr_init(&attr);pthread_attr_setstacksize(&attr,64u<<20);
+    int error=pthread_create(&s->worker,&attr,boot,s);pthread_attr_destroy(&attr);
+    if(error){__android_log_print(ANDROID_LOG_ERROR,"D2RAndroid","[android-startup] boot worker creation failed error=%d",error);ANativeActivity_finish(a);}
 }

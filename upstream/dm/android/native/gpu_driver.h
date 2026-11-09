@@ -15,7 +15,8 @@
 typedef enum dm_vk_backend {
     DM_VK_BACKEND_SYSTEM = 0,
     DM_VK_BACKEND_TURNIP = 1,
-    DM_VK_BACKEND_PANVK = 2
+    DM_VK_BACKEND_PANVK = 2,
+    DM_VK_BACKEND_MALISX2 = 3
 } dm_vk_backend;
 
 typedef struct dm_vk_driver {

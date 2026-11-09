@@ -1023,27 +1023,29 @@ PRESENT = {
     'controller/console/switch/playerinventoryexpansionlayouthd.json': _inv_rw,   # 物品栏 + 符文之语清单控件（见 _RW） | Inventory + runeword list widgets (see _RW)
     'controller/playerinventoryexpansionlayouthd.json': _inv_touch(False),
 }
-# 字号（先用大字号）：产品走主机档 _profileConsoleHD（小 26 / 中 28 / 中大 32），前端按钮字在 2868×1320 上约 1.1 毫米高。
-# 换成原包掌机大字档 _profilehandheldlv.json 的那组值（Blizzard 给小屏做的，统一 40）。只换字号，面板矩形与缩放不动。
-# Font sizes (use the large sizes first): the product uses the console profile _profileConsoleHD (small 26 / medium 28 / medium-large 32), and front-end button text is about 1.1 mm high at 2868×1320.
-# Replaced with the set of values from the original package's handheld large-font profile _profilehandheldlv.json (made by Blizzard for small screens, uniformly 40). Only font sizes are replaced; panel rectangles and scaling are unchanged.
-BIG_FONT = (('"XMediumFontSize": 30,\n    "MediumFontSize": 28,\n    "SmallFontSize": 26,\n'),
-            ('"SmallFontSize": 40,\n    "MediumFontSize": 40,\n    "MediumLargeFontSize": 40,\n    "XMediumFontSize": 40,\n    "XMediumLargeFontSize": 40,\n    "LargeFontSize": 40,\n    "SmallPanelFontSize": 32,\n    "TooltipFontSize": 42,\n    "OptionsDividerRect": { "x": 0, "y": 150 },\n'))   # TooltipFontSize：物品 / 技能说明框的字（基础档 36；42 = 原包主机大字档 _profileconsolelv.json 的值） | TooltipFontSize: text of the item / skill tooltip (base profile 36; 42 = the value in the original package's console large-font profile _profileconsolelv.json)
-# OptionsDividerRect：选项页分节标题下的横线。行距拉到 180 之后标题字在行内垂直居中（约 y 90），原来 y 90 的横线正好压在字上——挪到 y 150（字的下方）
-# OptionsDividerRect: the horizontal line under the section headers of the options page. After the row pitch is stretched to 180 the header text is vertically centered in the row (about y 90), and the line originally at y 90 sits right on the text -- moved to y 150 (below the text)
+# Android uses a 1.5× accessibility scale, not a fixed 60-point font. A fixed size made
+# 26/28/30-point labels 2–2.3× larger and clipped dialogue text. Scale only font sizes
+# present in each source profile; leave inherited sizes and panel geometry unchanged.
+def _scale_profile_font_sizes(text):
+    def scale(match):
+        return match.group(1) + str((int(match.group(2)) * 3 + 1) // 2)
+    scaled, count = re.subn(r'("(?:[A-Za-z]+)?FontSize"\s*:\s*)(\d+)', scale, text)
+    if count == 0:
+        raise SystemExit('touch_layout：profile 没有可缩放的字号')
+    return scaled
+
 def build_profile(romfs, outdir):
     path, text = read_layout(romfs, 'controller/_profileconsolehd.json')
     text = text.replace('\r\n', '\n')   # 这份原版是 CRLF | This original-game file uses CRLF
-    if text.count(BIG_FONT[0]) != 1: raise SystemExit('touch_layout：_profileConsoleHD 的字号段不是原样（原版变了？）')
-    o = os.path.join(outdir, 'profile_consolehd.json'); open(o, 'w', encoding='utf-8').write(text.replace(BIG_FONT[0], BIG_FONT[1])); repl = {path.lower(): o}
-    # 掌机档（DM_OPMODE=0：过热降级会切过去，触屏脚本也用它）走另一份 _profileHandheldHD，上面的改动到不了：同一组值也写进去，
-    # 否则掌机档下字是小的、选项页分节横线穿过标题字（在 Mac 上的 iOS 包截到）
-    # The handheld profile (DM_OPMODE=0: overheat downgrade switches to it, and touch scripts use it too) goes through a separate _profileHandheldHD that the changes above do not reach: the same set of values is written there too,
-    # otherwise under the handheld profile the text is small and the options page section divider line runs through the header text (captured on the iOS app on the Mac)
+    anchor = '"XMediumFontSize": 30,\n    "MediumFontSize": 28,\n    "SmallFontSize": 26,\n'
+    if text.count(anchor) != 1: raise SystemExit('touch_layout：_profileConsoleHD 的字号段不是原样（原版变了？）')
+    o = os.path.join(outdir, 'profile_consolehd.json'); open(o, 'w', encoding='utf-8').write(_scale_profile_font_sizes(text)); repl = {path.lower(): o}
+    # 掌机档（DM_OPMODE=0：过热降级会切过去，触屏脚本也用它）走另一份 _profileHandheldHD；同样按原字号逐项放大。
+    # The handheld profile (DM_OPMODE=0: thermal fallback and touch controls use it) is separate; scale its own source values too.
     path, text = read_layout(romfs, 'controller/_profilehandheldhd.json'); text = text.replace('\r\n', '\n')
-    a = '"XMediumLargeFontSize": 36,\n    "MediumLargeFontSize": 36,\n    "XMediumFontSize": 34,\n'
-    if text.count(a) != 1: raise SystemExit('touch_layout：_profileHandheldHD 的字号段不是原样（原版变了？）')
-    o = os.path.join(outdir, 'profile_handheldhd.json'); open(o, 'w', encoding='utf-8').write(text.replace(a, BIG_FONT[1])); repl[path.lower()] = o
+    anchor = '"XMediumLargeFontSize": 36,\n    "MediumLargeFontSize": 36,\n    "XMediumFontSize": 34,\n'
+    if text.count(anchor) != 1: raise SystemExit('touch_layout：_profileHandheldHD 的字号段不是原样（原版变了？）')
+    o = os.path.join(outdir, 'profile_handheldhd.json'); open(o, 'w', encoding='utf-8').write(_scale_profile_font_sizes(text)); repl[path.lower()] = o
     return repl
 
 # NPC 对话菜单（交谈 / 交易 / 雇佣…）的行距：原版每行约 66 单位 = 2.6 毫米，相邻行必然点串；行间距 10 → 124，行距约 180 单位 = 7 毫米（手指目标下限，热区审计）。
@@ -1323,12 +1325,11 @@ def build_pad_root(romfs, outdir):
         o = os.path.join(outdir, 'padroot_' + rel.replace('/', '_')); open(o, 'w', encoding='utf-8').write(new); repl[path.lower()] = o
     return repl
 # 选项页的行距：原版每行 100 单位 = 3.9 毫米，相邻两行必然点串（热区审计）；改成 180 单位 = 7 毫米。列表本来就滚动，行内控件位置不动。
-# Row pitch of the options pages: the original game uses 100 units per row = 3.9 mm, so adjacent rows are inevitably mis-tapped (hit-area audit); changed to 180 units = 7 mm. The list scrolls anyway, and widget positions within a row are unchanged.
-def _row_height(fn):
+def _row_height(fn, height=180):
     def g(text):
         text, n = fn(text); a = '"rowHeight": "$OptionsTableRowHeight"'
         if a not in text: raise SystemExit('touch_layout：选项表的 rowHeight 不是原样（原版布局变了？）')
-        return text.replace(a, '"rowHeight": 180'), n + text.count(a)
+        return text.replace(a, '"rowHeight": %d' % height), n + text.count(a)
     return g
 for _k in ('soundoptionspanelhd.json', 'gameplayoptionspanelhd.json', 'onlinegameoptionspanelhd.json'): PRESENT[_k] = _row_height(PRESENT[_k])
 

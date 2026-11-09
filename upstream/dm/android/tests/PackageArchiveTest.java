@@ -12,6 +12,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Arrays;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -58,6 +59,10 @@ public final class PackageArchiveTest {
              + ", \"shaders\": " + shaders + ", \"derived\": 3 }\n}\n";
     }
 
+    private static String manifestWithOverlay() {
+        return manifest(1, 9, 2, 3).replace("\"shaders\": 3", "\"shaders\": 3, \"romfs_overlay\": 2");
+    }
+
     // 与九个模块 + 2 个 romfs + 3 个着色器配套的清单。
     // The manifest that matches nine modules, two romfs files and three shaders.
     private static String matching(int format) { return manifest(format, 9, 2, 3); }
@@ -74,13 +79,21 @@ public final class PackageArchiveTest {
         return entries;
     }
 
+    private static String[] completeWithOverlay() {
+        String[] entries = Arrays.copyOf(complete(), complete().length + 2);
+        entries[entries.length - 2] = "romfs_overlay/data/.build.config";
+        entries[entries.length - 1] = "romfs_overlay/data/large-font.data";
+        return entries;
+    }
+
     // 清单解析在真机上是界面层用 org.json 做的；这里用最小解析，好让规则本身被验证而不是被绕过。
     // On device the UI layer parses with org.json; a minimal parse here keeps the rules under test rather than
     // letting the test hand the rules whatever it likes.
     private static PackageArchive.Declaration declaration(byte[] manifest) {
         String text = new String(manifest, StandardCharsets.UTF_8);
         return new PackageArchive.Declaration(number(text, "\"format\""), number(text, "\"game\""),
-                                              number(text, "\"romfs\""), number(text, "\"shaders\""));
+                                              number(text, "\"romfs\""), number(text, "\"romfs_overlay\""),
+                                              number(text, "\"shaders\""));
     }
 
     private static int number(String text, String key) {
@@ -143,23 +156,37 @@ public final class PackageArchiveTest {
     public static void main(String[] args) throws Exception {
         // 1. 一个完整的包被接受，落到正确的地方，清单最后落盘。
         File good = tempDir("good");
-        PackageArchive.Counts counts = unpack(packageZip(matching(1), complete()),
+        PackageArchive.Counts counts = unpack(packageZip(manifestWithOverlay(), completeWithOverlay()),
                                               new File(good, "assets"), new File(good, "modules"));
-        check(counts.game == 9 && counts.romfs == 2 && counts.shaders == 3,
-              "完整的包被接受，返回实际数量 " + counts.game + "/" + counts.romfs + "/" + counts.shaders);
-        check(new File(good, "modules/libdmguest_main.so").isFile(), "模块落在内部目录");
-        check(!new File(good, "assets/game").exists(), "模块没有落到外部目录");
-        check(new File(good, "assets/manifest.json").isFile(), "完成标记最后落盘");
-        check(new File(good, "assets/romfs/data/build_key.txt").isFile(), "RomFS 原样落在外部目录");
-        check(new File(good, "assets/derived.tsv").isFile(), "包根的 derived.tsv 被接受");
-        check(new File(good, "modules/subsdk0.gates.tsv").isFile(), "空的布局文件也照收（subsdk0.gates.tsv 本来就是 0 字节）");
+        check(counts.game == 9 && counts.romfs == 2 && counts.romfsOverlay == 2 && counts.shaders == 3,
+              "complete package accepts original and overlay resources and reports actual counts");
+        check(new File(good, "modules/libdmguest_main.so").isFile(), "modules land in internal storage");
+        check(!new File(good, "assets/game").exists(), "modules do not land in external storage");
+        check(new File(good, "assets/manifest.json").isFile(), "completion marker is written last");
+        check(new File(good, "assets/romfs/data/build_key.txt").isFile(), "RomFS lands in external storage");
+        check(new File(good, "assets/romfs_overlay/data/.build.config").isFile()
+              && new File(good, "assets/romfs_overlay/data/large-font.data").isFile(),
+              "generated RomFS overlay lands in the imported package");
+        check(new File(good, "assets/derived.tsv").isFile(), "root derived.tsv is accepted");
+        check(new File(good, "modules/subsdk0.gates.tsv").isFile(),
+              "empty layout file remains valid");
 
-        // 2. 没给 derived.tsv 的包照样能导入（老包不该被拒）。
+        unpack(packageZip(manifest(1, 9, 2, 3), complete()), new File(good, "assets"), new File(good, "modules"));
+        check(!new File(good, "assets/romfs_overlay").exists(),
+              "reimporting a legacy package removes the stale font overlay");
+
         File noDerived = tempDir("noderived");
         String[] without = new String[complete().length - 1];
         System.arraycopy(complete(), 0, without, 0, without.length);
         unpack(packageZip(manifest(1, 9, 2, 3), without), new File(noDerived, "assets"), new File(noDerived, "modules"));
-        check(new File(noDerived, "assets/manifest.json").isFile(), "没有 derived.tsv 的包仍然可以导入");
+        check(new File(noDerived, "assets/manifest.json").isFile(), "package without derived.tsv still imports");
+        File malformedOverlay = tempDir("malformed-overlay");
+        String[] configOnly = Arrays.copyOf(complete(), complete().length + 1);
+        configOnly[configOnly.length - 1] = "romfs_overlay/data/.build.config";
+        check("dmAndroidLaunchImportIncomplete".equals(refusal(
+                  packageZip(manifestWithOverlay(), configOnly),
+                  new File(malformedOverlay, "assets"), new File(malformedOverlay, "modules"))),
+              "overlay missing its replacement archive is refused");
 
         // 3. 事故现场：每个类别一个文件、清单却自报真实数量 —— 必须被拒，而且上一次的模块必须还在。
         File incident = tempDir("incident");
@@ -220,8 +247,9 @@ public final class PackageArchiveTest {
         //    就把完成标记写进去，绕过"最后才写 manifest"的顺序保证。
         File escape = tempDir("escape");
         File[] escapeBefore = previous(escape);
-        for (String nasty : new String[]{"romfs/../manifest.json", "game/../manifest.json",
-                                         "/etc/passwd", "game/..\\..\\x", "shaders/./x", "game//x"}) {
+        for (String nasty : new String[]{"romfs/../manifest.json", "romfs_overlay/../manifest.json",
+                                         "game/../manifest.json", "/etc/passwd",
+                                         "game/..\\..\\x", "shaders/./x", "game//x"}) {
             String broken = refusal(packageZip(null, nasty), escapeBefore[0], escapeBefore[1]);
             check("dmAndroidLaunchImportBadEntry".equals(broken), "越界条目被拒：" + nasty + "（撞的是 " + broken + "）");
         }
@@ -264,12 +292,14 @@ public final class PackageArchiveTest {
         check(read(new File(replacedBefore[1], "sdk.fixups.tsv")).length() > 0, "布局文件也在");
 
         // 13. 纯规则：名字判定。
-        check(PackageArchive.allowed("game/libdmguest_main.so") && PackageArchive.allowed("derived.tsv"),
-              "合法的条目名被放行");
+        check(PackageArchive.allowed("game/libdmguest_main.so") && PackageArchive.allowed("derived.tsv")
+              && PackageArchive.allowed("romfs_overlay/data/large-font.data"),
+              "valid package entry names are accepted");
         check(!PackageArchive.allowed("game") && !PackageArchive.allowed("game/") && !PackageArchive.allowed("other/x"),
-              "把 game 本身、空尾巴和未知前缀都挡在外面");
-        check(!PackageArchive.allowed("../manifest.json") && !PackageArchive.allowed("romfs/../../x"),
-              "带 .. 的名字一律不放行");
+              "game itself, empty tails and unknown prefixes are rejected");
+        check(!PackageArchive.allowed("../manifest.json") && !PackageArchive.allowed("romfs/../../x")
+              && !PackageArchive.allowed("romfs_overlay/../manifest.json"),
+              "parent traversal paths are rejected");
 
         System.out.println("PackageArchiveTest： " + checks + " 项通过");
     }

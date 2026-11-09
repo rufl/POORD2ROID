@@ -6,8 +6,8 @@ layout(set=0,binding=0,std430) readonly buffer RawTimestamp { uvec2 raw[]; } sou
 layout(set=0,binding=1,std430) writeonly buffer CounterReport { uvec4 report[]; } destination;
 layout(push_constant) uniform Parameters { uint multiplier; uint right_shift; uint valid_bits; uint reserved; } parameters;
 void main() {
-    // CPU先验证参数：有效位1..64，右移0..95及结果无溢出。
-    // CPU validates bits 1..64, shift 0..95, and absence of result overflow.
+    // CPU先验证参数：有效位1..64、右移0..95；报告值按uint64_t模2^64。
+    // CPU validates bits 1..64 and shift 0..95; the uint64 report wraps modulo 2^64.
     uvec2 tick=source.raw[0];
     if(parameters.valid_bits<32u){tick.x&=(1u<<parameters.valid_bits)-1u;tick.y=0u;}
     else if(parameters.valid_bits==32u)tick.y=0u;

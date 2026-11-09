@@ -7,6 +7,9 @@
 #include "dm_elysium.h"
 #include "dm_bossrush.h"
 #include <TargetConditionals.h>
+#ifdef __ANDROID__
+#include "debug_stats.h"
+#endif
 #include <fcntl.h>
 #include <dirent.h>
 #include <stdatomic.h>
@@ -1534,7 +1537,17 @@ void dm_longframe_note(const char *what) {
 void dm_perf_present(double iv) {   // 出图线程每帧调一次（滞后 8 帧的实际上屏间隔 ms；−1 = 被系统丢弃，0 = 无读数） | Called once per frame by the present thread (the actual present interval in ms, lagging by 8 frames; −1 = dropped by the system, 0 = no reading)
     static const char *path; static int init; static unsigned c16, c25, c33, disc; static double sum; static uint64_t t0, f0, cpu0, tstart;
     if (!init) { init = 1; const char *e = getenv("DM_PERF_FILE"); path = e ? (strcmp(e, "0") ? e : NULL) : (TARGET_OS_IPHONE ? "perf.txt" : NULL); t0 = tstart = now_ns(); f0 = dm_nvn_frame_count(); cpu0 = dm_nvn_sub_cpu_ns(); }
-    dm_3d_scale_feed(iv);   // 动态 3D 比例的控制器吃同一份上屏间隔（hle_oe.c） | The dynamic 3D scale controller consumes the same present intervals (hle_oe.c)
+#ifdef __ANDROID__
+    static unsigned gpu_sample_count;
+    static double gpu_sample_ms = -1;
+    if ((gpu_sample_count++ & 15u) == 0) {
+        dm_android_debug_stats gpu_stats; dm_android_debug_get(&gpu_stats);
+        gpu_sample_ms = gpu_stats.gpu_valid ? gpu_stats.gpu_ms : -1;
+    }
+    dm_3d_scale_feed(iv, gpu_sample_ms);
+#else
+    dm_3d_scale_feed(iv, -1);
+#endif
     if (!path) return;
     if (iv < 0) disc++; else if (iv > 0) { sum += iv; if (iv <= 20.8) c16++; else if (iv <= 29.2) c25++; else c33++; }
     uint64_t now = now_ns(); if (now - t0 < 10000000000ull) return;

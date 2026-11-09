@@ -142,12 +142,9 @@ final class TouchControls {
         scale = Math.min(scale, (height - safeTop - safeBottom) * .36f / (184 * density));
         for (ControlView group : groups) group.unit = density * scale;
         float margin = 16 * density * scale;
-        // 与原生前端相同的 16:9 居中画面；短按键优先放到上下黑边。
-        // Use the native frontend's centered 16:9 viewport; place the compact keys in letterbox space first.
-        float gameWidth = width, gameHeight = width * 9f / 16f;
-        if (gameHeight > height) { gameHeight = height; gameWidth = height * 16f / 9f; }
-        float gameLeft = (width - gameWidth) / 2, gameTop = (height - gameHeight) / 2;
-        float gameBottom = gameTop + gameHeight;
+        // The game image fills the native surface at the selected ultrawide aspect.
+        float gameTop = 0, gameHeight = height;
+        float gameBottom = height;
         ControlView stick = groups.get(0), face = groups.get(1);
         float low = height - safeBottom - margin;
         float baseBottom = low - gameBottom >= Math.max(stick.pixelHeight(), face.pixelHeight()) + margin ? low :

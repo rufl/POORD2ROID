@@ -1,0 +1,188 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0, std430) readonly buffer BcInput { uint words[]; } source_data;
+layout(set = 0, binding = 1, std430) writeonly buffer PixelOutput { uint words[]; } output_data;
+layout(push_constant) uniform Parameters {
+    uint source_pitch;
+    uint width;
+    uint height;
+    uint output_pitch;
+    uint format;
+    uint bytes_per_pixel;
+} params;
+
+uint source_byte(uint offset) {
+    return (source_data.words[offset >> 2] >> ((offset & 3u) * 8u)) & 255u;
+}
+uint source_u16(uint offset) {
+    return source_byte(offset) | (source_byte(offset + 1u) << 8u);
+}
+uint source_u24(uint offset) {
+    return source_byte(offset) | (source_byte(offset + 1u) << 8u) | (source_byte(offset + 2u) << 16u);
+}
+uint source_u32(uint offset) {
+    return source_byte(offset) | (source_byte(offset + 1u) << 8u) |
+           (source_byte(offset + 2u) << 16u) | (source_byte(offset + 3u) << 24u);
+}
+int signed_byte(uint value) {
+    return value < 128u ? int(value) : int(value) - 256;
+}
+
+void decode_alpha_block(uint offset, bool signed_values, bool fixed_point, out int values[16]) {
+    int palette[8];
+    int a0 = signed_values ? max(signed_byte(source_byte(offset)), -127) : int(source_byte(offset));
+    int a1 = signed_values ? max(signed_byte(source_byte(offset + 1u)), -127) : int(source_byte(offset + 1u));
+    palette[0] = a0;
+    palette[1] = a1;
+    if (a0 > a1) {
+        if (fixed_point) {
+            palette[2] = (56173 * a0 +  9363 * a1 + 32768) >> 16;
+            palette[3] = (46812 * a0 + 18724 * a1 + 32768) >> 16;
+            palette[4] = (37450 * a0 + 28086 * a1 + 32768) >> 16;
+            palette[5] = (28086 * a0 + 37450 * a1 + 32768) >> 16;
+            palette[6] = (18724 * a0 + 46812 * a1 + 32768) >> 16;
+            palette[7] = ( 9363 * a0 + 56173 * a1 + 32768) >> 16;
+        } else {
+            palette[2] = (6 * a0 + a1) / 7;
+            palette[3] = (5 * a0 + 2 * a1) / 7;
+            palette[4] = (4 * a0 + 3 * a1) / 7;
+            palette[5] = (3 * a0 + 4 * a1) / 7;
+            palette[6] = (2 * a0 + 5 * a1) / 7;
+            palette[7] = (a0 + 6 * a1) / 7;
+        }
+    } else {
+        if (fixed_point) {
+            palette[2] = (52429 * a0 + 13107 * a1 + 32768) >> 16;
+            palette[3] = (39321 * a0 + 26215 * a1 + 32768) >> 16;
+            palette[4] = (26215 * a0 + 39321 * a1 + 32768) >> 16;
+            palette[5] = (13107 * a0 + 52429 * a1 + 32768) >> 16;
+            palette[6] = signed_values ? -127 : 0;
+            palette[7] = signed_values ? 127 : 255;
+        } else {
+            palette[2] = (4 * a0 + a1) / 5;
+            palette[3] = (3 * a0 + 2 * a1) / 5;
+            palette[4] = (2 * a0 + 3 * a1) / 5;
+            palette[5] = (a0 + 4 * a1) / 5;
+            palette[6] = 0;
+            palette[7] = 255;
+        }
+    }
+    uint low_indices = source_u24(offset + 2u);
+    uint high_indices = source_u24(offset + 5u);
+    for (uint i = 0u; i < 16u; ++i) {
+        uint index = i < 8u ? ((low_indices >> (3u * i)) & 7u)
+                            : ((high_indices >> (3u * (i - 8u))) & 7u);
+        values[i] = palette[index];
+    }
+}
+
+void decode_color_block(uint offset, bool force_opaque, out uint colors[16]) {
+    uint c0 = source_u16(offset);
+    uint c1 = source_u16(offset + 2u);
+    uint r0_5 = (c0 >> 11u) & 31u;
+    uint g0_6 = (c0 >> 5u) & 63u;
+    uint b0_5 = c0 & 31u;
+    uint r1_5 = (c1 >> 11u) & 31u;
+    uint g1_6 = (c1 >> 5u) & 63u;
+    uint b1_5 = c1 & 31u;
+    uint palette[4];
+    uint r0 = uint((int(r0_5) * 527 + 23) >> 6);
+    uint g0 = uint((int(g0_6) * 259 + 33) >> 6);
+    uint b0 = uint((int(b0_5) * 527 + 23) >> 6);
+    uint r1 = uint((int(r1_5) * 527 + 23) >> 6);
+    uint g1 = uint((int(g1_6) * 259 + 33) >> 6);
+    uint b1 = uint((int(b1_5) * 527 + 23) >> 6);
+    palette[0] = r0 | (g0 << 8u) | (b0 << 16u) | 0xff000000u;
+    palette[1] = r1 | (g1 << 8u) | (b1 << 16u) | 0xff000000u;
+    if (c0 > c1 || force_opaque) {
+        uint r2 = uint(((int(2u * r0_5 + r1_5) * 351) + 61) >> 7);
+        uint g2 = uint(((int(2u * g0_6 + g1_6) * 2763) + 1039) >> 11);
+        uint b2 = uint(((int(2u * b0_5 + b1_5) * 351) + 61) >> 7);
+        uint r3 = uint(((int(r0_5 + 2u * r1_5) * 351) + 61) >> 7);
+        uint g3 = uint(((int(g0_6 + 2u * g1_6) * 2763) + 1039) >> 11);
+        uint b3 = uint(((int(b0_5 + 2u * b1_5) * 351) + 61) >> 7);
+        palette[2] = r2 | (g2 << 8u) | (b2 << 16u) | 0xff000000u;
+        palette[3] = r3 | (g3 << 8u) | (b3 << 16u) | 0xff000000u;
+    } else {
+        uint r2 = uint(((int(r0_5 + r1_5) * 1053) + 125) >> 8);
+        uint g2 = uint(((int(g0_6 + g1_6) * 4145) + 1019) >> 11);
+        uint b2 = uint(((int(b0_5 + b1_5) * 1053) + 125) >> 8);
+        palette[2] = r2 | (g2 << 8u) | (b2 << 16u) | 0xff000000u;
+        palette[3] = 0u;
+    }
+    uint indices = source_u32(offset + 4u);
+    for (uint i = 0u; i < 16u; ++i) colors[i] = palette[(indices >> (2u * i)) & 3u];
+}
+
+void main() {
+    uvec2 block = gl_GlobalInvocationID.xy;
+    uint blocks_x = (params.width + 3u) / 4u;
+    uint blocks_y = (params.height + 3u) / 4u;
+    if (block.x >= blocks_x || block.y >= blocks_y) return;
+
+    bool bc1 = params.format == 0x41u || params.format == 0x42u || params.format == 0x45u || params.format == 0x46u;
+    bool bc2 = params.format == 0x43u || params.format == 0x47u;
+    bool bc3 = params.format == 0x44u || params.format == 0x48u;
+    bool bc4 = params.format == 0x49u || params.format == 0x4au;
+    uint block_bytes = (bc1 || bc4) ? 8u : 16u;
+    uint block_offset = block.y * params.source_pitch + block.x * block_bytes;
+    uint pixels[16];
+
+    if (bc1 || bc2 || bc3) {
+        uint color_offset = block_offset + (bc1 ? 0u : 8u);
+        decode_color_block(color_offset, !bc1, pixels);
+        if (bc2) {
+            for (uint i = 0u; i < 16u; ++i) {
+                uint nibble = (source_byte(block_offset + i / 2u) >> ((i & 1u) * 4u)) & 15u;
+                pixels[i] = (pixels[i] & 0x00ffffffu) | ((nibble * 17u) << 24u);
+            }
+        } else if (bc3) {
+            int alpha[16];
+            decode_alpha_block(block_offset, false, false, alpha);
+            for (uint i = 0u; i < 16u; ++i)
+                pixels[i] = (pixels[i] & 0x00ffffffu) | (uint(alpha[i]) << 24u);
+        }
+    } else {
+        bool signed_values = params.format == 0x4au || params.format == 0x4cu;
+        int red[16];
+        decode_alpha_block(block_offset, signed_values, true, red);
+        if (params.format == 0x4bu || params.format == 0x4cu) {
+            int green[16];
+            decode_alpha_block(block_offset + 8u, signed_values, true, green);
+            for (uint i = 0u; i < 16u; ++i)
+                pixels[i] = (uint(red[i]) & 255u) | ((uint(green[i]) & 255u) << 8u);
+        } else {
+            for (uint i = 0u; i < 16u; ++i) pixels[i] = uint(red[i]) & 255u;
+        }
+    }
+
+    uint x0 = block.x * 4u;
+    uint padded_width = params.output_pitch / params.bytes_per_pixel;
+    for (uint y = 0u; y < 4u; ++y) {
+        uint image_y = block.y * 4u + y;
+        if (image_y >= params.height) continue;
+        uint row_word = image_y * (params.output_pitch / 4u);
+        if (params.bytes_per_pixel == 4u) {
+            for (uint x = 0u; x < 4u; ++x)
+                if (x0 + x < params.width) output_data.words[row_word + x0 + x] = pixels[y * 4u + x];
+        } else if (params.bytes_per_pixel == 2u) {
+            for (uint pair = 0u; pair < 2u; ++pair) {
+                uint x = x0 + pair * 2u;
+                if (x < padded_width) {
+                    uint packed = (pixels[y * 4u + pair * 2u] & 0xffffu) |
+                                  ((pixels[y * 4u + pair * 2u + 1u] & 0xffffu) << 16u);
+                    output_data.words[row_word + x / 2u] = packed;
+                }
+            }
+        } else {
+            if (x0 < padded_width) {
+                uint packed = (pixels[y * 4u] & 255u) |
+                              ((pixels[y * 4u + 1u] & 255u) << 8u) |
+                              ((pixels[y * 4u + 2u] & 255u) << 16u) |
+                              ((pixels[y * 4u + 3u] & 255u) << 24u);
+                output_data.words[row_word + x0 / 4u] = packed;
+            }
+        }
+    }
+}

@@ -58,11 +58,14 @@ static const char *backend_name(dm_vk_backend backend) {
     switch (backend) {
         case DM_VK_BACKEND_TURNIP: return "Turnip";
         case DM_VK_BACKEND_PANVK: return "PanVK";
+        case DM_VK_BACKEND_MALISX2: return "MaliSX2";
         default: return "system";
     }
 }
 static VkDriverId expected_driver_id(dm_vk_backend backend) {
-    return backend == DM_VK_BACKEND_PANVK ? VK_DRIVER_ID_MESA_PANVK : VK_DRIVER_ID_MESA_TURNIP;
+    if (backend == DM_VK_BACKEND_PANVK) return VK_DRIVER_ID_MESA_PANVK;
+    if (backend == DM_VK_BACKEND_MALISX2) return VK_DRIVER_ID_ARM_PROPRIETARY;
+    return VK_DRIVER_ID_MESA_TURNIP;
 }
 
 static int configure(dm_vk_driver *d) {
@@ -93,7 +96,7 @@ static int configure(dm_vk_driver *d) {
                     else{*value++=0;key=trim(key);value=trim(value);
                         if(!strcmp(key,"directory")){driver_keys=1;line_ok=copy_text(d,d->driver_directory,sizeof d->driver_directory,value);}
                         else if(!strcmp(key,"library")){driver_keys=1;line_ok=copy_text(d,d->driver_name,sizeof d->driver_name,value);}
-                        else if(!strcmp(key,"backend")){driver_keys=1;backend_configured=1;if(backend_keys++)line_ok=driver_error(d,"duplicate backend configuration");else if(!strcmp(value,"turnip"))d->backend=DM_VK_BACKEND_TURNIP;else if(!strcmp(value,"panvk"))d->backend=DM_VK_BACKEND_PANVK;else line_ok=driver_error(d,"backend must be turnip or panvk");}
+                        else if(!strcmp(key,"backend")){driver_keys=1;backend_configured=1;if(backend_keys++)line_ok=driver_error(d,"duplicate backend configuration");else if(!strcmp(value,"turnip"))d->backend=DM_VK_BACKEND_TURNIP;else if(!strcmp(value,"panvk"))d->backend=DM_VK_BACKEND_PANVK;else if(!strcmp(value,"malisx2"))d->backend=DM_VK_BACKEND_MALISX2;else line_ok=driver_error(d,"backend must be turnip, panvk or malisx2");}
                         else if(!strcmp(key,"require_custom")){driver_keys=1;if(strcmp(value,"0")&&strcmp(value,"1"))line_ok=driver_error(d,"require_custom must be 0 or 1");else if(!required)d->require_custom=*value=='1';}
                         else if(!strcmp(key,"subgroup_size")){
                             d->subgroup_policy_required=1;
@@ -115,12 +118,12 @@ static int configure(dm_vk_driver *d) {
     if(name&&!copy_text(d,d->driver_name,sizeof d->driver_name,name))return 0;
     if(!d->requested_custom){if(d->require_custom)return driver_error(d,"required custom driver directory is missing");return 1;}
     if(!d->driver_directory[0])return driver_error(d,"custom driver directory is missing");
-    if(!d->driver_name[0])strcpy(d->driver_name,d->backend==DM_VK_BACKEND_PANVK?"libvulkan_panfrost.so":"vulkan.purple.so");
+    if(!d->driver_name[0])strcpy(d->driver_name,d->backend==DM_VK_BACKEND_PANVK?"libvulkan_panfrost.so":d->backend==DM_VK_BACKEND_MALISX2?"libvulkan_malisx2.so":"vulkan.purple.so");
     if(strchr(d->driver_name,'/')||strchr(d->driver_name,'\\')||!strcmp(d->driver_name,".")||!strcmp(d->driver_name,".."))return driver_error(d,"custom driver library must be a basename");
     char resolved[PATH_MAX];if(!realpath(d->driver_directory,resolved))return driver_error(d,"custom driver directory: %s",strerror(errno));
     if(!strncmp(resolved,"/sdcard",7)||!strncmp(resolved,"/storage",8)||!strncmp(resolved,"/mnt",4))return driver_error(d,"custom driver must be in internal executable storage");
     if(snprintf(d->driver_directory,sizeof d->driver_directory,"%s/",resolved)>=(int)sizeof d->driver_directory)return driver_error(d,"custom driver directory is too long");
-    if(d->backend==DM_VK_BACKEND_TURNIP||d->backend==DM_VK_BACKEND_PANVK){
+    if(d->backend==DM_VK_BACKEND_TURNIP||d->backend==DM_VK_BACKEND_PANVK||d->backend==DM_VK_BACKEND_MALISX2){
         const char *hooks=getenv("DM_ANDROID_LIBDIR");if(!hooks||!*hooks)return driver_error(d,"DM_ANDROID_LIBDIR is required for custom Vulkan drivers");
         if(!realpath(hooks,resolved))return driver_error(d,"hook library directory: %s",strerror(errno));
         if(snprintf(d->hook_directory,sizeof d->hook_directory,"%s/",resolved)>=(int)sizeof d->hook_directory)return driver_error(d,"hook directory is too long");
@@ -192,6 +195,10 @@ int dm_vk_driver_open(dm_vk_driver *d) {
     if(d->backend==DM_VK_BACKEND_PANVK){
         if(android_get_device_api_level()<31)driver_error(d,"PanVK r9 requires Android API31+");
         else if(access("/dev/mali0",F_OK))driver_error(d,"PanVK requires the Mali kbase device /dev/mali0");
+        else if(open_custom_driver(d))return 1;
+    }else if(d->backend==DM_VK_BACKEND_MALISX2){
+        if(android_get_device_api_level()<29)driver_error(d,"MaliSX2 requires Android API29+");
+        else if(access("/dev/mali0",F_OK))driver_error(d,"MaliSX2 requires the Mali kbase device /dev/mali0");
         else if(open_custom_driver(d))return 1;
     }else if(d->backend==DM_VK_BACKEND_TURNIP){
         if(android_get_device_api_level()<30||access("/dev/kgsl-3d0",F_OK))driver_error(d,"Turnip T30 requires API30+ and KGSL");
@@ -326,14 +333,19 @@ int dm_vk_driver_validate(dm_vk_driver *d,VkPhysicalDevice physical,const char *
     VkPhysicalDeviceSubgroupProperties subgroup={.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES,.pNext=supported?&identity:NULL};
     VkPhysicalDeviceProperties2 properties={.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,.pNext=&subgroup};
     d->vkGetPhysicalDeviceProperties2(physical,&properties);d->actual_driver_id=supported?identity.driverID:0;d->subgroup_size=subgroup.subgroupSize;
-    driver_log("actual device=%s driver_id=%u name=%s info=%s API=%u.%u subgroup=%u stages=%#x operations=%#x quad_all=%u",
-        base.deviceName,d->actual_driver_id,supported?identity.driverName:"unknown",supported?identity.driverInfo:"unknown",VK_VERSION_MAJOR(base.apiVersion),VK_VERSION_MINOR(base.apiVersion),subgroup.subgroupSize,subgroup.supportedStages,subgroup.supportedOperations,subgroup.quadOperationsInAllStages);
+    driver_log("actual device=%s vendor=%#x device_id=%#x driver_version=%#x driver_id=%u name=%s info=%s API=%u.%u subgroup=%u stages=%#x operations=%#x quad_all=%u",
+        base.deviceName,base.vendorID,base.deviceID,base.driverVersion,d->actual_driver_id,
+        supported?identity.driverName:"unknown",supported?identity.driverInfo:"unknown",
+        VK_VERSION_MAJOR(base.apiVersion),VK_VERSION_MINOR(base.apiVersion),subgroup.subgroupSize,
+        subgroup.supportedStages,subgroup.supportedOperations,subgroup.quadOperationsInAllStages);
     if(!validate_subgroup_policy(d,physical))return 0;
     if(!d->using_custom){if(d->requested_subgroup_size&&shader_directory)return profile_matches(d,shader_directory);return 1;}
     if(base.apiVersion<VK_API_VERSION_1_1)return driver_error(d,"custom driver requires Vulkan1.1+");
     VkDriverId expected=expected_driver_id(d->backend);
     if(!supported||identity.driverID!=expected)
         return driver_error(d,"requested %s was not loaded; actual driver_id=%u",backend_name(d->backend),d->actual_driver_id);
+    if(d->backend==DM_VK_BACKEND_MALISX2&&!dm_vk_malisx2_identity_matches(base.vendorID,identity.driverInfo))
+        return driver_error(d,"MaliSX2 identity mismatch: vendor=%#x info=%s",base.vendorID,identity.driverInfo);
     if(shader_directory&&!profile_matches(d,shader_directory))return 0;
     driver_log("requested=%s selected=%s identity verified",backend_name(d->backend),backend_name(d->backend));return 1;
 }

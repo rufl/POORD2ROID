@@ -74,6 +74,8 @@ void dm_elysium_arm(int on) { (void)on; }   // 极乐世界勾选（dm_elysium.c
 void dm_custom_on_uimsg(const char *cat, const char *act, const char *arg) { (void)cat; (void)act; (void)arg; }   // 「自定义」设置（dm_custom.c）的桩 | stub for the "Custom" settings (dm_custom.c)
 void dm_test_stash_take(int n) { (void)n; }
 void dm_stash_take(int n) { (void)n; }
+float dm_ui_nx(float nx) { return nx; }
+float dm_ui_nx_back(float nx) { return nx; }
 float dm_ui_ny(float ny) { return ny; }
 int dm_screen_real(int *w, int *h) { (void)w; (void)h; return 0; }
 void dm_uiscreen_enable(int m) { (void)m; }

@@ -27,13 +27,21 @@ static const char *const dm_cpu_phase_names[DM_CPU_PHASE_COUNT] = {
 // Phases may nest: draw encloses bind/dep and present_total encloses the present path; each item's own call count separates inclusive from self cost.
 static uint64_t dm_cpu_phase_ns[DM_CPU_PHASE_COUNT], dm_cpu_phase_calls[DM_CPU_PHASE_COUNT];
 static uint64_t dm_cpu_phase_frames;
-static inline uint64_t dm_cpu_phase_begin(void) { return dm_android_clock_ns(CLOCK_MONOTONIC); }
+static int dm_cpu_phases_enabled;
+static void dm_cpu_phase_configure(void) {
+    const char *env=getenv("DM_VK_CPU_PHASES");
+    dm_cpu_phases_enabled=env&&*env?strcmp(env,"0")!=0:perf_config_int("cpu_phases",0)!=0;
+    if(dm_cpu_phases_enabled)LOG("[vulkan] CPU phase timing enabled; per-phase clock_gettime sampling is active");
+}
+// Keep per-stage clock reads opt-in; they otherwise add two clock_gettime calls to every measured phase.
+static inline uint64_t dm_cpu_phase_begin(void) { return dm_cpu_phases_enabled?dm_android_clock_ns(CLOCK_MONOTONIC):0; }
 static inline void dm_cpu_phase_end(unsigned phase, uint64_t started) {
+    if(!dm_cpu_phases_enabled)return;
     dm_cpu_phase_ns[phase] += dm_android_clock_ns(CLOCK_MONOTONIC) - started;
     dm_cpu_phase_calls[phase]++;
 }
 static void dm_cpu_phase_report(uint64_t frames) {
-    if (!frames) return;
+    if (!dm_cpu_phases_enabled || !frames) return;
     dm_cpu_phase_frames += frames;
     static uint64_t previous_ns[DM_CPU_PHASE_COUNT], previous_calls[DM_CPU_PHASE_COUNT];
     char line[768]; size_t used = 0;
@@ -115,7 +123,7 @@ static long dm_abnormal_fastest_core_khz(void) {
 static void dm_abnormal_frame(uint64_t frame, uint64_t interval_ns, uint64_t cpu_ns, uint64_t gpu_ns,
                               uint64_t draws, uint64_t passes, uint64_t uploads,
                               uint64_t ubo_bytes, uint64_t ubo_misses, uint64_t descriptor_misses) {
-    for (unsigned phase = 0; phase < DM_CPU_PHASE_COUNT; phase++) {
+    if(dm_cpu_phases_enabled)for (unsigned phase = 0; phase < DM_CPU_PHASE_COUNT; phase++) {
         dm_abnormal_frame_ns[phase] = dm_cpu_phase_ns[phase] - dm_abnormal_previous_ns[phase];
         dm_abnormal_previous_ns[phase] = dm_cpu_phase_ns[phase];
         dm_abnormal_frame_calls[phase] = dm_cpu_phase_calls[phase] - dm_abnormal_previous_calls[phase];
@@ -144,14 +152,16 @@ static void dm_abnormal_frame(uint64_t frame, uint64_t interval_ns, uint64_t cpu
             dm_abnormal_this_core_khz(), dm_abnormal_fastest_core_khz());
     // 每条都带本帧调用次数：耗时涨了要能立刻分清「活变多了」还是「每次变慢了」。
     // Every entry carries this frame's call count: when a cost rises, that tells "more work" from "slower per call" at a glance.
-    char line[1024]; size_t used = 0;
-    for (unsigned phase = 0; phase < DM_CPU_PHASE_COUNT; phase++) {
-        int written = snprintf(line + used, sizeof line - used, "%s%s=%.3f/%llu", phase ? " " : "",
-                               dm_cpu_phase_names[phase], dm_abnormal_frame_ns[phase] / 1e6,
-                               (unsigned long long)dm_abnormal_frame_calls[phase]);
-        if (written < 0 || (size_t)written >= sizeof line - used) break;
-        used += (size_t)written;
-    }
-    fprintf(dm_abnormal_file, "  %s\n", line);
+    if(dm_cpu_phases_enabled){
+        char line[1024]; size_t used = 0;
+        for (unsigned phase = 0; phase < DM_CPU_PHASE_COUNT; phase++) {
+            int written = snprintf(line + used, sizeof line - used, "%s%s=%.3f/%llu", phase ? " " : "",
+                                   dm_cpu_phase_names[phase], dm_abnormal_frame_ns[phase] / 1e6,
+                                   (unsigned long long)dm_abnormal_frame_calls[phase]);
+            if (written < 0 || (size_t)written >= sizeof line - used) break;
+            used += (size_t)written;
+        }
+        fprintf(dm_abnormal_file, "  %s\n", line);
+    }else fprintf(dm_abnormal_file,"  cpu_phases=disabled\n");
     fflush(dm_abnormal_file);
 }

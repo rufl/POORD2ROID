@@ -1,25 +1,31 @@
-// 启动界面：选择设置与导入数据包，写进 launch-settings.conf 后再真正启动游戏页面。
-// 构图照标题画面来做：美术铺满整屏，标题在右上，菜单是右侧一列，版本信息在最右下。
-// Launcher: collects settings and imports a data package, writes them into launch-settings.conf, then starts the
-// game page. The composition follows a title screen: artwork fills the screen, the logo sits top-right, the menu
-// is a single right-aligned column, and app info sits at the bottom right.
+// 启动界面：设置、数据包导入和存档操作；保留全屏背景，控制项放进适配横屏的侧边卡片。
+// Launcher: settings, package import and save management over the existing full-screen artwork, with a
+// landscape-adaptive control panel.
 package org.d2r.android.port;
 
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.system.ErrnoException;
+import android.system.Os;
 import android.provider.OpenableColumns;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.util.Log;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -69,22 +75,21 @@ public final class LauncherActivity extends Activity {
     private int resolutionIndex;
     private String customResolution = "";   // 预设之外的手写分辨率（-1 档时用）| a hand-written resolution outside the presets
     private int driverIndex;
+    private boolean launchStarting;
     private String packageSummary = "";
     private boolean importing;
     private volatile boolean cancelImport;
-    // 出图分辨率只提供几档预设：它是"主机档"尺寸，掌机档由 native 按 0.8 同比例缩放（与 Mac/iOS 同一语义）。
-    // 空字符串表示跟随档位（不写这个键，用原版 16:9 常数）。
-    // 1280x720 与 1600x900 是给 GPU 吃紧的机器留的：分辨率降一档，帧率就上去一截（实测 1080p→720p 约 10→16 帧）。
-    // The output resolution offers a few presets only: it is the docked-profile size and the handheld profile is
-    // scaled by 0.8 inside native code, the same semantics as Mac and iOS. An empty string means "follow the
-    // profile", which writes no key and keeps the original 16:9 constants.
-    // 1280x720 and 1600x900 are there for GPU-bound devices: one step down in resolution is a real step up in frame
-    // rate (measured 1080p -> 720p: about 10 -> 16 fps).
-    private static final String[] RESOLUTION_PRESETS = {"", "1280x720", "1600x900", "1920x1080", "2560x1440"};
-    // Keep stock Vulkan, JimVulkan PanVK r9 for Mali/kbase (Android 12+), and Turnip for Qualcomm KGSL.
-    private static final String[] DRIVER_STATES = {"system", "panvk", "turnip"};
+    // The docked-size presets include native 20:9 output options for the Xiaomi 11T. The 1280x576 option is the
+    // performance choice: it keeps the 20:9 view while shading 20% fewer pixels than 1280x720; the 0.8 handheld
+    // profile preserves aspect ratio. The game image is upscaled by the Vulkan presenter to the actual display.
+    private static final String[] RESOLUTION_PRESETS = {
+        "", "1280x576", "1600x720", "1920x864", "1280x720", "1600x900", "1920x1080", "2560x1440"
+    };
+    // Keep System Vulkan, MaliSX2 and PanVK for Mali/kbase, plus Turnip for Qualcomm KGSL.
+    private static final String[] DRIVER_STATES = {"system", "malisx2", "panvk", "turnip"};
     private static final String TURNIP_ASSET = "turnip/vulkan.purple.so";
     private static final String PANVK_ASSET = "panvk/libvulkan_panfrost.so";
+    private static final String MALISX2_ASSET = "malisx2/libvulkan_malisx2.so";
 
     private String text(String key) {
         int resource = getResources().getIdentifier(key, "string", getPackageName());
@@ -160,21 +165,75 @@ public final class LauncherActivity extends Activity {
     }
 
     private void setStatus(String message, int colour) {
+        String value = message == null ? "" : message;
         statusView.setTextColor(colour);
-        statusView.setText(message == null ? "" : message);
+        statusView.setText(value);
+        statusView.setVisibility(value.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private GradientDrawable shape(int fill, int stroke, int radius) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setCornerRadius(dp(radius));
+        drawable.setStroke(dp(1), stroke);
+        return drawable;
     }
 
     private TextView item(String value, float size, int colour, boolean bold, boolean clickable) {
-        float density = getResources().getDisplayMetrics().density;
         TextView view = new TextView(this);
         view.setText(value);
         view.setTextColor(colour);
         view.setTextSize(size);
-        view.setGravity(Gravity.END);
+        view.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         if (bold) view.setTypeface(Typeface.DEFAULT_BOLD);
-        view.setPadding(0, (int)(7 * density), 0, (int)(7 * density));
+        view.setPadding(0, dp(2), 0, dp(2));
         view.setClickable(clickable);
         return view;
+    }
+
+    private TextView buttonItem(String value, int textColour, int fill, int stroke,
+                                int height, float size, boolean bold) {
+        TextView view = item(value, size, textColour, bold, true);
+        view.setMaxLines(2);
+        view.setEllipsize(TextUtils.TruncateAt.END);
+        view.setPadding(dp(12), dp(6), dp(12), dp(6));
+        view.setMinHeight(dp(height));
+        view.setBackground(new RippleDrawable(ColorStateList.valueOf(0x44ffffff),
+                                               shape(fill, stroke, 10), null));
+        view.setFocusable(true);
+        return view;
+    }
+
+    private void addGap(LinearLayout layout, int height) {
+        layout.addView(new View(this), new LinearLayout.LayoutParams(1, dp(height)));
+    }
+
+    private void applyImmersiveMode() {
+        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                             WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        getWindow().getDecorView().setSystemUiVisibility(
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    private void addChoice(LinearLayout row, TextView choice) {
+        choice.setMaxLines(2);
+        choice.setEllipsize(TextUtils.TruncateAt.END);
+        choice.setTextSize(12);
+        choice.setPadding(dp(10), dp(5), dp(10), dp(5));
+        choice.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33ffffff),
+                                                 shape(0x55413a32, 0x667c6d59, 9), null));
+        choice.setFocusable(true);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(48), 1f);
+        row.addView(choice, params);
     }
 
     private String profileLabel() {
@@ -215,8 +274,20 @@ public final class LauncherActivity extends Activity {
         return android.os.Build.VERSION.SDK_INT >= 31
             && panvkBundled() && new File("/dev/mali0").exists();
     }
+    private boolean malisx2Bundled() {
+        try (InputStream stream = getAssets().open(MALISX2_ASSET)) {
+            return stream != null;
+        } catch (IOException error) {
+            return false;
+        }
+    }
+    private boolean malisx2Available() {
+        return android.os.Build.VERSION.SDK_INT >= 29
+            && malisx2Bundled() && new File("/dev/mali0").exists();
+    }
     private boolean driverAvailable(String driver) {
         if (driver.equals("system")) return true;
+        if (driver.equals("malisx2")) return malisx2Available();
         if (driver.equals("panvk")) return panvkAvailable();
         if (driver.equals("turnip")) return turnipAvailable();
         return false;
@@ -230,7 +301,8 @@ public final class LauncherActivity extends Activity {
     }
     private String driverLabel() {
         String state = DRIVER_STATES[driverIndex];
-        String key = state.equals("panvk") ? "dmAndroidLaunchDriverPanvk"
+        String key = state.equals("malisx2") ? "dmAndroidLaunchDriverMalisx2"
+                : state.equals("panvk") ? "dmAndroidLaunchDriverPanvk"
                 : state.equals("turnip") ? "dmAndroidLaunchDriverTurnip" : "dmAndroidLaunchDriverSystem";
         return text("dmAndroidLaunchDriver") + "：" + text(key);
     }
@@ -348,8 +420,10 @@ public final class LauncherActivity extends Activity {
         String profile = readProfileSize();
         if (profile == null) return "host-subgroup-size.txt";
         boolean panvk = selected.equals("panvk");
-        String libraryName = panvk ? "libvulkan_panfrost.so" : "vulkan.purple.so";
-        String asset = panvk ? PANVK_ASSET : TURNIP_ASSET;
+        boolean malisx2 = selected.equals("malisx2");
+        String libraryName = panvk ? "libvulkan_panfrost.so"
+                : malisx2 ? "libvulkan_malisx2.so" : "vulkan.purple.so";
+        String asset = panvk ? PANVK_ASSET : malisx2 ? MALISX2_ASSET : TURNIP_ASSET;
         File directory = new File(temporary, "driver-" + selected);
         File library = new File(directory, libraryName);
         String copyProblem = copyDriverAsset(asset, library);
@@ -359,7 +433,7 @@ public final class LauncherActivity extends Activity {
         content.append("directory=").append(directory.getAbsolutePath()).append('\n');
         content.append("library=").append(libraryName).append('\n');
         content.append("require_custom=1\n");
-        if (!panvk) content.append("subgroup_size=").append(profile).append('\n');
+        if (!panvk && !malisx2) content.append("subgroup_size=").append(profile).append('\n');
         return writeDriverConfiguration(configuration, content.toString());
     }
 
@@ -381,9 +455,10 @@ public final class LauncherActivity extends Activity {
     // 没有数据包就把"启动游戏"置灰：点了会失败的事不该看起来能点。
     // Without a package the start entry greys out: something that would fail should not look available.
     private void updateStartState() {
-        boolean ready = packageReady() && !importing;
+        boolean ready = packageReady() && !importing && !launchStarting;
         startItem.setEnabled(ready);
-        startItem.setTextColor(ready ? GOLD : MUTED);
+        startItem.setTextColor(ready ? 0xff24190f : MUTED);
+        startItem.setAlpha(ready ? 1f : 0.55f);
     }
 
     // 把当前内存里的设置反映到界面上。点一下之后只调这个，**绝不重新读盘** ——
@@ -408,9 +483,10 @@ public final class LauncherActivity extends Activity {
         // off globally by default).
         if (overlaySwitch != null) overlaySwitch.setChecked("1".equals(LaunchSettings.read(configFile(), "debug_overlay")));
         String preset = LaunchSettings.read(configFile(), "resolution");
-        resolutionIndex = 0;
-        customResolution = "";
-        if (preset != null) {
+        // Upgrade missing and legacy empty resolution settings to the Xiaomi-wide default.
+        // An empty value left by older launchers otherwise bypasses DM_GAME_RES and the game falls back to 800x600.
+        resolutionIndex = preset == null || preset.isEmpty() ? 1 : 0;
+        if (preset != null && !preset.isEmpty()) {
             int found = -1;
             for (int i = 0; i < RESOLUTION_PRESETS.length; i++) if (RESOLUTION_PRESETS[i].equals(preset)) found = i;
             // 预设里没有的值（玩家自己写进配置的）原样留着：启动界面以前会把这种值悄悄抹掉，
@@ -426,81 +502,150 @@ public final class LauncherActivity extends Activity {
         driverIndex = 0;
         if (driver != null) for (int i = 0; i < DRIVER_STATES.length; i++) if (DRIVER_STATES[i].equals(driver)) driverIndex = i;
         if (!driverAvailable(DRIVER_STATES[driverIndex])) driverIndex = 0;
+        Log.i("D2RAndroid", "[driver] launcher restored=" + (driver == null ? "default" : driver)
+                + " selected=" + DRIVER_STATES[driverIndex]
+                + " available={system:true,malisx2:" + malisx2Available()
+                + ",panvk:" + panvkAvailable() + ",turnip:" + turnipAvailable() + "}");
         applyLabels();
     }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         if (stepAsideForRunningGame()) return;
-        int width = getResources().getDisplayMetrics().widthPixels;
-        int height = getResources().getDisplayMetrics().heightPixels;
-        int margin = (int)(width * 0.045f);
+        applyImmersiveMode();
+
+        float density = getResources().getDisplayMetrics().density;
+        float widthDp = getResources().getDisplayMetrics().widthPixels / density;
+        int panelWidthDp = Math.min(480, Math.max(340, Math.round(widthDp * 0.48f)));
+        panelWidthDp = Math.min(panelWidthDp, Math.max(300, Math.round(widthDp - 44)));
 
         FrameLayout root = new FrameLayout(this);
         root.addView(new LauncherBackgroundView(this),
-            new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                                         ViewGroup.LayoutParams.MATCH_PARENT));
 
-        LinearLayout column = new LinearLayout(this);
-        column.setOrientation(LinearLayout.VERTICAL);
-        column.setGravity(Gravity.END);
-        column.setPadding(margin, (int)(height * 0.075f), margin, (int)(height * 0.045f));
+        FrameLayout panel = new FrameLayout(this);
+        panel.setBackground(shape(0xe91a1918, 0x77e8c078, 18));
+        panel.setClipToOutline(true);
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
+            dp(panelWidthDp), ViewGroup.LayoutParams.MATCH_PARENT,
+            Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        panelParams.setMargins(0, dp(14), dp(18), dp(14));
+        root.addView(panel, panelParams);
 
-        column.addView(item(text("dmAndroidLaunchTitle"), 42, GOLD, true, false));
-        column.addView(item(text("dmAndroidLaunchSubtitle"), 15, MUTED, false, false));
 
-        column.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1.6f));
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(21), dp(13), dp(18), dp(12));
 
-        startItem = item("▸  " + text("dmAndroidLaunchStart"), 28, GOLD, true, true);
+        TextView title = item(text("dmAndroidLaunchTitle"), 23, GOLD, true, false);
+        title.setMaxLines(1);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        content.addView(title);
+
+        TextView subtitle = item(text("dmAndroidLaunchSubtitle"), 11, MUTED, false, false);
+        subtitle.setMaxLines(1);
+        subtitle.setEllipsize(TextUtils.TruncateAt.END);
+        content.addView(subtitle);
+        addGap(content, 9);
+
+        startItem = buttonItem("▶  " + text("dmAndroidLaunchStart"), 0xff24190f,
+                               0xffe8c078, 0xfff2d39f, 44, 16, true);
+        startItem.setGravity(Gravity.CENTER);
         startItem.setOnClickListener(v -> startGame());
-        column.addView(startItem);
+        content.addView(startItem, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        addGap(content, 7);
 
+        LinearLayout choices = new LinearLayout(this);
+        choices.setOrientation(LinearLayout.HORIZONTAL);
+        profileItem = item(profileLabel(), 12, PARCHMENT, false, true);
+        profileItem.setOnClickListener(v -> { handheld = !handheld; applyLabels(); });
+        addChoice(choices, profileItem);
+        resolutionItem = item(resolutionLabel(), 12, PARCHMENT, false, true);
+        resolutionItem.setOnClickListener(v -> {
+            resolutionIndex = (resolutionIndex + 1) % RESOLUTION_PRESETS.length;
+            applyLabels();
+        });
+        LinearLayout.LayoutParams resolutionParams = new LinearLayout.LayoutParams(
+            0, dp(46), 1f);
+        choices.addView(resolutionItem, resolutionParams);
+        content.addView(choices);
+        addGap(content, 6);
+
+        LinearLayout options = new LinearLayout(this);
+        options.setOrientation(LinearLayout.HORIZONTAL);
+        if (turnipAvailable() || panvkAvailable() || malisx2Available()) {
+            driverItem = buttonItem(driverLabel(), PARCHMENT, 0x55413a32,
+                                    0x667c6d59, 44, 11, false);
+            driverItem.setOnClickListener(v -> {
+                driverIndex = nextDriverIndex();
+                applyLabels();
+                writeState();
+                Log.i("D2RAndroid", "[driver] launcher selection changed to " + DRIVER_STATES[driverIndex]);
+            });
+            LinearLayout.LayoutParams driverParams = new LinearLayout.LayoutParams(
+                0, dp(44), 1f);
+            driverParams.setMarginEnd(dp(4));
+            options.addView(driverItem, driverParams);
+        }
         overlaySwitch = new Switch(this);
         overlaySwitch.setText(text("dmAndroidLaunchOverlay"));
         overlaySwitch.setTextColor(PARCHMENT);
-        overlaySwitch.setTextSize(19);
-        overlaySwitch.setGravity(Gravity.END);
-        column.addView(overlaySwitch);
+        overlaySwitch.setTextSize(11);
+        overlaySwitch.setGravity(Gravity.CENTER_VERTICAL);
+        overlaySwitch.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams overlayParams = new LinearLayout.LayoutParams(
+            0, dp(44), driverItem == null ? 1f : 1.15f);
+        options.addView(overlaySwitch, overlayParams);
+        content.addView(options);
+        addGap(content, 6);
 
-        profileItem = item(profileLabel(), 19, PARCHMENT, false, true);
-        profileItem.setOnClickListener(v -> { handheld = !handheld; applyLabels(); });
-        column.addView(profileItem);
-
-        resolutionItem = item(resolutionLabel(), 19, PARCHMENT, false, true);
-        resolutionItem.setOnClickListener(v -> { resolutionIndex = (resolutionIndex + 1) % RESOLUTION_PRESETS.length; applyLabels(); });
-        column.addView(resolutionItem);
-
-        if (turnipAvailable() || panvkAvailable()) {
-            driverItem = item(driverLabel(), 19, PARCHMENT, false, true);
-            driverItem.setOnClickListener(v -> { driverIndex = nextDriverIndex(); applyLabels(); writeState(); });
-            column.addView(driverItem);
-        }
-
-        importItem = item(importLabel(), 19, PARCHMENT, false, true);
+        importItem = buttonItem(importLabel(), PARCHMENT, 0x55413a32,
+                                0x667c6d59, 44, 12, false);
         importItem.setOnClickListener(v -> pickPackage());
-        column.addView(importItem);
+        content.addView(importItem, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        addGap(content, 5);
 
-        // 存档导入/导出：走系统的文件选择器（应用不需要任何存储权限），包是玩家自己选的路径。
-        // Save import/export goes through the system file picker (the app needs no storage permission); the player
-        // picks the location.
-        TextView saveExportItem = item(text("dmAndroidSaveExport"), 19, PARCHMENT, false, true);
+        LinearLayout saves = new LinearLayout(this);
+        saves.setOrientation(LinearLayout.HORIZONTAL);
+        TextView saveExportItem = buttonItem(text("dmAndroidSaveExport"), PARCHMENT,
+            0x55332e29, 0x557c6d59, 40, 11, false);
+        saveExportItem.setGravity(Gravity.CENTER);
         saveExportItem.setOnClickListener(v -> exportSave());
-        column.addView(saveExportItem);
-        TextView saveImportItem = item(text("dmAndroidSaveImport"), 19, PARCHMENT, false, true);
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
+        saveParams.setMarginEnd(dp(5));
+        saves.addView(saveExportItem, saveParams);
+        TextView saveImportItem = buttonItem(text("dmAndroidSaveImport"), PARCHMENT,
+            0x55332e29, 0x557c6d59, 40, 11, false);
+        saveImportItem.setGravity(Gravity.CENTER);
         saveImportItem.setOnClickListener(v -> confirmImportSave());
-        column.addView(saveImportItem);
+        saves.addView(saveImportItem, new LinearLayout.LayoutParams(0, dp(40), 1f));
+        content.addView(saves);
 
-        column.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1f));
-
-        statusView = item("", 14, WARNING, false, false);
-        column.addView(statusView);
-        column.addView(item(text("dmAndroidLaunchPending"), 13, MUTED, false, false));
+        statusView = item("", 11, WARNING, false, false);
+        statusView.setMaxLines(2);
+        statusView.setEllipsize(TextUtils.TruncateAt.END);
+        content.addView(statusView);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.addView(column, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                                                            ViewGroup.LayoutParams.MATCH_PARENT));
-        root.addView(scroll, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                                                          ViewGroup.LayoutParams.MATCH_PARENT));
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.setClipToPadding(false);
+        scroll.addView(content, new ScrollView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        panel.addView(scroll, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        View accent = new View(this);
+        GradientDrawable accentShape = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[]{0x00e8c078, 0xffe8c078, 0x00e8c078});
+        accentShape.setCornerRadius(dp(2));
+        accent.setBackground(accentShape);
+        FrameLayout.LayoutParams accentParams = new FrameLayout.LayoutParams(
+            dp(3), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT);
+        accentParams.setMargins(dp(1), dp(20), 0, dp(20));
+        panel.addView(accent, accentParams);
 
         refreshFromDisk();
         setContentView(root);
@@ -509,8 +654,15 @@ public final class LauncherActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (stepAsideForRunningGame()) return;
+        launchStarting = false;
+        applyImmersiveMode();
         refreshFromDisk();
     }
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) applyImmersiveMode();
+    }
+
 
     // 选包用系统文件选择器：应用不需要任何存储权限，也不必知道文件放在哪。
     // The system picker chooses the package, so the app needs no storage permission and does not care where the
@@ -677,6 +829,7 @@ public final class LauncherActivity extends Activity {
                 root.optInt("format", PackageArchive.Declaration.ABSENT),
                 counts == null ? PackageArchive.Declaration.ABSENT : counts.optInt("game", PackageArchive.Declaration.ABSENT),
                 counts == null ? PackageArchive.Declaration.ABSENT : counts.optInt("romfs", PackageArchive.Declaration.ABSENT),
+                counts == null ? PackageArchive.Declaration.ABSENT : counts.optInt("romfs_overlay", PackageArchive.Declaration.ABSENT),
                 counts == null ? PackageArchive.Declaration.ABSENT : counts.optInt("shaders", PackageArchive.Declaration.ABSENT));
         } catch (JSONException error) {
             throw new IOException("package manifest is not valid JSON: " + error.getMessage());
@@ -695,7 +848,32 @@ public final class LauncherActivity extends Activity {
             : String.format(format, failure.arguments);
     }
 
+    private String commitLaunchSettings(String content) {
+        final File destination;
+        try {
+            destination = configFile();
+        } catch (RuntimeException error) {
+            return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        }
+        File pending = new File(destination.getParentFile(), destination.getName() + ".pending");
+        try (FileOutputStream output = new FileOutputStream(pending, false)) {
+            output.write(content.getBytes(StandardCharsets.UTF_8));
+            output.getFD().sync();
+        } catch (IOException error) {
+            pending.delete();
+            return error.getMessage();
+        }
+        try {
+            Os.rename(pending.getAbsolutePath(), destination.getAbsolutePath());
+            return null;
+        } catch (ErrnoException error) {
+            pending.delete();
+            return error.getMessage();
+        }
+    }
+
     private void startGame() {
+        if (launchStarting) return;
         if (importing) {
             setStatus(String.format(text("dmAndroidLaunchImporting"), 0), WARNING);
             return;
@@ -704,32 +882,45 @@ public final class LauncherActivity extends Activity {
             setStatus(text("dmAndroidLaunchNeedsImport"), WARNING);
             return;
         }
-        // 先准备所选驱动：自定义驱动复制到应用内部目录并写 gpu-driver.conf；系统模式删除旧配置。
-        // Prepare the selected driver first: custom libraries are copied into internal storage and gpu-driver.conf
-        // is written; the system mode removes stale custom configuration.
-        // 失败就停止启动，避免界面显示所选驱动但实际加载系统驱动。
-        // Abort on failure rather than showing one selection while loading another driver.
+        // Prepare the selected driver first and abort if it cannot be configured. Never silently substitute a different driver.
+        String requestedDriver = DRIVER_STATES[driverIndex];
+        Log.i("D2RAndroid", "[driver] launch requested=" + requestedDriver);
         setStatus(text("dmAndroidLaunchDriverPreparing"), MUTED);
         String driverProblem = prepareDriver();
         if (driverProblem != null) {
+            Log.e("D2RAndroid", "[driver] launch preparation failed requested=" + requestedDriver
+                    + " reason=" + driverProblem);
             setStatus(String.format(text("dmAndroidLaunchDriverFailed"), driverProblem), WARNING);
             return;
         }
+        Log.i("D2RAndroid", "[driver] launch configuration prepared requested=" + requestedDriver);
         setStatus("", PARCHMENT);
         StringBuilder content = new StringBuilder();
         content.append("# 由启动界面写入 | written by the launcher\n");
         content.append("debug_overlay=").append(overlaySwitch.isChecked() ? "1" : "0").append('\n');
         content.append("operation_mode=").append(handheld ? "handheld" : "console").append('\n');
-        // Cap fresh installs at 30 fps; preserve a frame-rate choice already made in the in-game menu.
         String presentHz = LaunchSettings.read(configFile(), "present_hz");
         content.append("present_hz=").append(presentHz == null ? "30" : presentHz).append('\n');
-        // 跟随档位时不写这个键：native 语义里"省略"就是不改动，保持原版 16:9 常数。
-        // "Follow profile" writes no key: omitting it means "leave it alone" to native, keeping the original 16:9 constants.
         if (resolutionIndex < 0) content.append("resolution=").append(customResolution).append('\n');
         else if (!RESOLUTION_PRESETS[resolutionIndex].isEmpty()) content.append("resolution=").append(RESOLUTION_PRESETS[resolutionIndex]).append('\n');
         content.append(LaunchSettings.foreign(configFile(), OWNED_KEYS));
-        write(configFile(), content.toString());
+        String settingsProblem = commitLaunchSettings(content.toString());
+        if (settingsProblem != null) {
+            Log.e("D2RAndroid", "[android-startup] launch settings commit failed; game not started: " + settingsProblem);
+            setStatus(settingsProblem, WARNING);
+            return;
+        }
+        Log.i("D2RAndroid", "[android-startup] launch settings committed; starting NativeActivity");
         setStatus("", PARCHMENT);
-        startActivity(new Intent(this, D2RActivity.class));
+        launchStarting = true;
+        updateStartState();
+        try {
+            startActivity(new Intent(this, D2RActivity.class));
+        } catch (RuntimeException error) {
+            launchStarting = false;
+            updateStartState();
+            Log.e("D2RAndroid", "[android-startup] activity launch failed", error);
+            setStatus(String.valueOf(error.getMessage()), WARNING);
+        }
     }
 }

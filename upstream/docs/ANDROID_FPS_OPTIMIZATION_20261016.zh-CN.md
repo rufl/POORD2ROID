@@ -1,6 +1,24 @@
 # Android 帧率优化：2026-10-16
 
+**Xiaomi 11T 20:9 presentation A/B (experimental, default off):** set `present_bar_blit 1` in `$DM_TEMP/perf.conf` to replace the full-surface black clear with black-source blits limited to the unused letterbox regions. Unsupported source formats or image allocation failures retain the full-clear path; `present_bar_blit 0` restores the baseline. The 60-frame `[vulkan-time]` entry reports full-clear, bars-blit, and fallback counts. Compare the same scene, backend, profile, and thermal state; this change has no measured FPS claim until the device A/B is run.
+
+
 **小米 11T System Vulkan / ADPF follow-up:** the saved log showed `APerformanceHint_getManager()` succeeded, but initial session creation failed for TID 27177; subsequent cycles were permanently skipped. `performance_hint.c` now retries on valid frame cycles with exponential backoff (60, 120, 240 … capped at 3600 cycles), while keeping the same present-thread binding and normal scheduling fallback. This only recovers if the failure is transient; no FPS improvement is claimed before device verification. Packaged as v0.6.66.
+
+**Vulkan acquire-semaphore ring (not Xiaomi-verified):** replaced the single acquire binary semaphore and its per-present prior-submission completion wait with a two-slot semaphore ring (capped by swapchain image count). Each slot is waited only before reuse, using the submission ticket whose queue wait consumed that semaphore. Present-wait semaphores remain per swapchain image; image layouts, blit, and presentation mode are unchanged. This allows up to two frames to overlap instead of forcing a completed previous blit before every acquire; it can increase input latency by up to one queued frame. Check `[vulkan-prior-acquire]` slot/reuse_ticket/wait and `[vulkan-present]` acquire_slot on device. FPS and latency effects remain unmeasured.
+
+
+**Vulkan batch tuning (not device-verified):** Default `flush_draws` increased from 256 to 512 to reduce batch and async-slot turnover in draw-heavy frames. `DM_VK_FLUSH_DRAWS=256` or `$DM_TEMP/perf.conf` (`flush_draws 256`) restores the previous threshold. The 32 MiB temporary-batch flush remains unchanged. Larger batches increase lookahead and per-batch memory exposure; no FPS gain is claimed before a controlled Xiaomi 11T A/B.
+
+**Occlusion-query reset reduction (not device-verified):** reset each query immediately before its render pass rather than resetting all 1024 queries at every batch start. The query index is unique within the batch, and an async slot is reused only after its fence retires; unused query results are never read. This preserves the query/report order and synchronization contract while reducing reset commands to queries actually used. No Xiaomi FPS or latency gain is claimed pending a controlled on-device A/B.
+
+**Descriptor writer scratch (not device-verified):** moved `bind_shader()`'s 256-entry `VkWriteDescriptorSet` array from its per-call stack frame into the existing static workspace. `queue_lock` serializes access, and descriptor comparison/update consumes the records before the next call; descriptor contents, cache keys, and GPU synchronization are unchanged. This reduces hot-path stack footprint; FPS impact is unknown pending device measurement.
+
+**Descriptor payload sizing (not device-verified):** the descriptor cache now derives payload capacity from the shader's immutable binding-plan counts (`2 × bindings + 3 × buffer/image descriptors + texel descriptors`) instead of scanning the write array once just to size it. The encoding pass checks the exact word count before hashing; descriptor contents, comparisons, and synchronization are unchanged. FPS impact remains unmeasured.
+
+**Draw dynamic-offset scratch (not device-verified):** reused the queue-serialized descriptor workspace for the 256-entry dynamic-offset array instead of reserving it in every draw call's stack frame. The same offsets and count still feed descriptor binding and diagnostics; Vulkan consumes them during command recording. Matching API 29 NDK `-O3` stack-usage reports show `draw_graphics_inner` at 5,328 bytes before and 4,304 bytes after. This is compiler-reported stack use, not an FPS measurement.
+
+**Per-phase clock instrumentation (opt-in):** detailed CPU phase timers previously called `clock_gettime(CLOCK_MONOTONIC)` at every phase boundary in the draw path. They are now off by default; set `DM_VK_CPU_PHASES=1` or `cpu_phases 1` in `$DM_TEMP/perf.conf` to enable them. Other frame/GPU counters remain active. This removes per-phase clock reads from normal gameplay but has not been FPS-benchmarked.
 
 **新USB手机横屏适配已装机：** V2505A/Adreno840首次资源部署完成；Activity原已横屏，修复Vulkan错误预旋转声明，实机current0x2→selectedIDENTITY0x1，3168x1440底图与HUD方向一致。控件按可用高度缩放并靠安全屏幕边缘。build exit0/11.388秒，已install-r且root看过截图，用户自行建角进入区域2野外，截图59.0FPS、120帧短窗0>33ms，横屏与触控正确；尚非长期全场景60，勿混同平板采样。证据 `<LOCAL_WORK>/research/android-phone-landscape-20261016/handoff.zh-CN.md`。以下为历史。
 

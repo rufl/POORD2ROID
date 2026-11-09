@@ -139,10 +139,10 @@ HLE_FORCE("_ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE", "前后台
 // （在出图 HLE 里调会自锁：渲染锁已被出图路径持有）。
 // 缺省：iOS 0.75，Mac 宿主 1.0（画面闸门对 Switch 真值比）；DM_3D_SCALE=0.5–1.0 覆盖。
 // 视觉尺子真值阶段（DM_NVN_RULER=1 的 A / B）强制 1.0，切到被测模式后才生效。
-// 动态比例（系统降频看的是占用率，温控档位只是粗信号 → 按实际掉帧调）：控制器吃出图线程报来的实际上屏间隔
-// （与 perf.txt 同源），三级 配置值(0.75) → 0.72 → 0.70；下限 0.70（实看 0.65 有差别）。规则见 scale3d_ctl_step。
-// 开关：DM_3D_SCALE_DYN=0 关；DM_THERMAL_NOFALLBACK=1（功耗 / 帧时间测量）也关——测量时比例必须钉住。
-// DM_3D_SCALE_DYN_INJECT=帧起-帧止：诊断，这段帧里把喂给控制器的间隔一律当 25 ms（Mac 上没有上屏时刻，用它验降级 / 回升的整条链）。
+// 动态比例按上屏帧率与 Android Vulkan GPU 时间共同判瓶颈：配置值 → 0.72 → 0.70 → 0.65 → 0.60 → 0.50；
+// GPU 时间不可用时退回帧率规则。每级只缩小内部 3D 目标，UI 与输出尺寸不变。规则见 scale3d_ctl_step。
+// Dynamic scaling uses present rate and Android Vulkan GPU time to identify the bottleneck: configured → 0.72 → 0.70 → 0.65 → 0.60 → 0.50;
+// if GPU timing is unavailable, it falls back to frame-rate-only control. Each level only shrinks the internal 3D target; UI/output size stay unchanged.
 // Notification: returns bool (w0), the host has no system notifications
 // ---------- 3D internal render scale ----------
 // The game has a static 3D render scale built in: renderer object (global pointer [main+0x31e0848]) member +0x66a4 (float, always 1.0 in the original game).
@@ -152,49 +152,54 @@ HLE_FORCE("_ZN2nn2oe20SetFocusHandlingModeENS0_17FocusHandlingModeE", "前后台
 // (calling it in the present HLE self-deadlocks: the render lock is already held by the present path).
 // Default: iOS 0.75, Mac host 1.0 (the screenshot gate compares against Switch ground truth); DM_3D_SCALE=0.5–1.0 overrides.
 // The visual ruler ground truth phase (A / B of DM_NVN_RULER=1) forces 1.0, it only takes effect after switching to the mode under test.
-// Dynamic scale (system throttling looks at utilization, the thermal state is only a coarse signal → adjust by actual dropped frames): the controller consumes the actual present intervals reported by the present thread
-// (same source as perf.txt), three levels configured value (0.75) → 0.72 → 0.70; lower limit 0.70 (0.65 is visibly different). For the rules see scale3d_ctl_step.
+// Dynamic scale (system throttling looks at utilization, thermal state is only a coarse signal): combine present intervals
+// with Android Vulkan GPU batch timing. If GPU timing is unavailable, use the frame-rate-only fallback.
 // Switches: DM_3D_SCALE_DYN=0 off; DM_THERMAL_NOFALLBACK=1 (power / frame time measurement) also turns it off -- the scale must be pinned during measurement.
-// DM_3D_SCALE_DYN_INJECT=start frame-end frame: diagnostic, within these frames every interval fed to the controller is taken as 25 ms (the Mac has no present timestamps, this is used to verify the whole lower / raise chain).
+// DM_3D_SCALE_DYN_INJECT=start frame-end frame: diagnostic, simulates GPU-bound 25 ms frames and 60 fps / GPU-headroom frames outside that range.
 #include <TargetConditionals.h>
-#define SCALE3D_MIN 0.70f
+#define SCALE3D_PERFORMANCE 0.70f
 #define SCALE3D_MID 0.72f
-// 纯函数控制器（单测 t_oe.c 直接喂序列）：level 0 = 配置值，越大越低。安全阀：只在可感的掉帧时动。
-//   窗：每累计 2 秒的上屏间隔一个窗，窗内帧率 = 上屏帧数 ÷ 间隔之和（被系统丢掉的帧不计数，那段时间落在下一张上屏帧的间隔里）。
-//   降：连续两个窗的帧率都 < 目标 × 0.92（60 帧时 55.2）→ 降一级。
-//   升：连续 10 个窗（20 秒）的帧率都 ≥ 目标 × 0.97（60 帧时 58.2）→ 升一级；升上去 10 秒内又被打回，下一次升要连续 30 个窗（60 秒）。
-//   换级后停判 2 秒（重建 3D 目标本身会顿一下）。目标帧率 = 1000 ÷ period_ms（0 = 60 帧）。
-// 旧规则（2 秒窗慢帧 > 5% 即降、升要连续 60 秒零慢帧、打回 ×3）降得太容易、几乎升不回：测试 iPhone 进局 582 局降过 33 局、0 局升回，
-// 两份实机日志在温控 2、帧率 59.8–60 下也被降到 0.70；慢帧数只留在诊断日志里，不再参与决策。
-// Pure-function controller (unit test t_oe.c feeds sequences directly): level 0 = configured value, larger is lower. Safety valve: only acts on perceptible dropped frames.
-//   Window: one window per 2 seconds of accumulated present intervals, frame rate in the window = presented frames ÷ sum of intervals (frames dropped by the system are not counted, that time falls into the interval of the next presented frame).
-//   Lower: frame rate of two consecutive windows both < target × 0.92 (55.2 at 60 fps) → lower one level.
-//   Raise: frame rate of 10 consecutive windows (20 seconds) all ≥ target × 0.97 (58.2 at 60 fps) → raise one level; if knocked back within 10 seconds of going up, the next raise needs 30 consecutive windows (60 seconds).
-//   Judging is suspended for 2 seconds after a level change (rebuilding the 3D target itself causes a hitch). Target frame rate = 1000 ÷ period_ms (0 = 60 fps).
-// The old rule (lower as soon as slow frames > 5% in a 2-second window, raise needs 60 consecutive seconds with zero slow frames, knock-back ×3) lowered too easily and almost never came back up: on the test iPhone, of 582 run entries 33 were lowered and 0 came back up,
-// and two real-device logs were also lowered to 0.70 at thermal state 2 with frame rate 59.8–60; the slow frame count is kept only in the diagnostic log and no longer takes part in the decision.
-typedef struct { int level, max_level; double period_ms; uint64_t hold_until, last_up; double win_ms, last_fps; unsigned win_n; int bad_run, good_run, need_good; } scale3d_ctl;
+#define SCALE3D_LOW 0.65f
+#define SCALE3D_LOWER 0.60f
+// 纯函数控制器（单测 t_oe.c 直接喂序列）：level 0 = 配置值，越大越低。
+// 窗：每累计 2 秒上屏间隔一个窗；GPU 样本有效时同时统计均值。
+// 降：连续两个窗帧率 < 目标 × 0.92，且 GPU 时间 ≥ 目标周期 × 0.80 → 降一级；无 GPU 样本时仅按帧率降级。
+// 升：连续 10 个窗帧率 ≥ 目标 × 0.97，且 GPU 时间 ≤ 目标周期 × 0.70 → 升一级；无 GPU 样本时仅按帧率升级。
+// 每次换级停判 2 秒；短期反复降级后升档等待 60 秒。
+// Pure-function controller (unit test t_oe.c feeds sequences directly): level 0 = configured value; higher levels lower resolution.
+// Window: one window per 2 seconds of presented intervals; average valid GPU samples in the same window.
+// Lower: two consecutive windows below target × 0.92 and GPU time ≥ 0.80 × target period; frame-rate-only fallback if GPU timing is unavailable.
+// Raise: 10 consecutive windows at or above target × 0.97 and GPU time ≤ 0.70 × target period; frame-rate-only fallback if GPU timing is unavailable.
+// Suspend judging for 2 seconds after each change; after a quick knock-back, wait 60 seconds before raising again.
+typedef struct { int level, max_level; double period_ms, win_gpu_ms; uint64_t hold_until, last_up; double win_ms, last_fps; unsigned win_n, win_gpu_n; int bad_run, good_run, need_good; } scale3d_ctl;
 #define S3_SEC 1000000000ull
 static void scale3d_ctl_hold(scale3d_ctl *c, uint64_t now, uint64_t ns) {   // 停判一段时间（进局 / 回前台 / 换级之后）：窗与连续计数清零 | suspend judging for a while (after entering a run / returning to foreground / changing level): the window and the consecutive counts are cleared
     if (now + ns > c->hold_until) c->hold_until = now + ns;
-    c->win_ms = 0; c->win_n = 0; c->bad_run = c->good_run = 0;
+    c->win_ms = 0; c->win_n = 0; c->win_gpu_ms = 0; c->win_gpu_n = 0; c->bad_run = c->good_run = 0;
 }
-static int scale3d_ctl_step(scale3d_ctl *c, double iv_ms, uint64_t now) {   // 返回当前级 | returns the current level
-    if (now < c->hold_until || iv_ms <= 0) return c->level;   // 停判中 / 无读数（0）/ 被丢弃（−1） | judging suspended / no reading (0) / dropped (−1)
+static int scale3d_ctl_step(scale3d_ctl *c, double iv_ms, double gpu_ms, uint64_t now) {   // 返回当前级 | returns the current level
+    if (now < c->hold_until || iv_ms <= 0) return c->level;   // 停判中 / 无读数（0）/ 被丢弃（−1）| judging suspended / no reading (0) / dropped (−1)
     c->win_ms += iv_ms; c->win_n++;
+    if (gpu_ms > 0) { c->win_gpu_ms += gpu_ms; c->win_gpu_n++; }
     if (c->win_ms < 2000) return c->level;
-    double tgt = 1000.0 / (c->period_ms > 0 ? c->period_ms : 1000.0 / 60), fps = c->win_n * 1000.0 / c->win_ms;
-    c->last_fps = fps; c->win_ms = 0; c->win_n = 0;
-    if (fps < tgt * 0.92) {
+    double period = c->period_ms > 0 ? c->period_ms : 1000.0 / 60;
+    double tgt = 1000.0 / period, fps = c->win_n * 1000.0 / c->win_ms;
+    int have_gpu = c->win_gpu_n != 0;
+    double gpu = have_gpu ? c->win_gpu_ms / c->win_gpu_n : 0;
+    c->last_fps = fps; c->win_ms = 0; c->win_n = 0; c->win_gpu_ms = 0; c->win_gpu_n = 0;
+    if (fps < tgt * 0.92 && (!have_gpu || gpu >= period * 0.80)) {
         c->good_run = 0;
         if (++c->bad_run >= 2 && c->level < c->max_level) {
-            if (c->last_up && now - c->last_up < 10 * S3_SEC) c->need_good = 30;   // 刚升上去 10 秒内又掉：下次升要 60 秒 | dropped again within 10 seconds of going up: the next raise needs 60 seconds
+            if (c->last_up && now - c->last_up < 10 * S3_SEC) c->need_good = 30;
             c->level++; scale3d_ctl_hold(c, now, 2 * S3_SEC);
         }
     } else {
         c->bad_run = 0;
-        if (fps >= tgt * 0.97) { if (++c->good_run >= (c->need_good ? c->need_good : 10) && c->level > 0) { c->level--; c->last_up = now; c->need_good = 0; scale3d_ctl_hold(c, now, 2 * S3_SEC); } }
-        else c->good_run = 0;
+        if (fps >= tgt * 0.97 && (!have_gpu || gpu <= period * 0.70)) {
+            if (++c->good_run >= (c->need_good ? c->need_good : 10) && c->level > 0) {
+                c->level--; c->last_up = now; c->need_good = 0; scale3d_ctl_hold(c, now, 2 * S3_SEC);
+            }
+        } else c->good_run = 0;
     }
     return c->level;
 }
@@ -209,10 +214,15 @@ static float scale3d_preset_target(int preset, float configured) {
     switch (preset) {
         case 0: target = configured; break;
         case 1: target = SCALE3D_BALANCED; break;
-        case 2: target = SCALE3D_MIN; break;
+        case 2: target = SCALE3D_PERFORMANCE; break;
         case 3: target = SCALE3D_ULTRA; break;
         default: return configured;
     }
+    return target > configured ? configured : target;
+}
+static float scale3d_auto_target(int level, float configured) {
+    float target = level <= 0 ? configured : level == 1 ? SCALE3D_MID : level == 2 ? SCALE3D_PERFORMANCE :
+                   level == 3 ? SCALE3D_LOW : level == 4 ? SCALE3D_LOWER : SCALE3D_ULTRA;
     return target > configured ? configured : target;
 }
 static _Atomic int g_scale3d_forced = -1;
@@ -235,13 +245,13 @@ void dm_present_hz_set(int hz) {
 static _Atomic int g_scale3d_level;
 static _Atomic int g_scale3d_resumed;
 void dm_3d_scale_resumed(void) { atomic_store(&g_scale3d_resumed, 1); }   // 前端：刚回前台。回来头几秒的慢帧是恢复（表面重建、缓存变冷），不是 GPU 吃紧：停判 3 秒 | front end: just returned to foreground. Slow frames in the first few seconds back are recovery (surface rebuild, caches gone cold), not GPU pressure: suspend judging for 3 seconds
-void dm_3d_scale_feed(double iv_ms) {   // 出图线程每帧调（diag.c dm_perf_present 转来）：实际上屏间隔 ms，−1 = 被丢弃，0 = 无读数 | called by the present thread every frame (forwarded from diag.c dm_perf_present): actual present interval in ms, −1 = dropped, 0 = no reading
-    static scale3d_ctl c = {.max_level = 2}; static int on = -1; static long inj0 = -1, inj1 = -1;
+void dm_3d_scale_feed(double iv_ms, double gpu_ms) {   // present thread feeds interval and optional Android GPU timing from diag.c
+    static scale3d_ctl c = {.max_level = 5}; static int on = -1; static long inj0 = -1, inj1 = -1;
     if (on < 0) { const char *e = getenv("DM_3D_SCALE_DYN"), *j = getenv("DM_3D_SCALE_DYN_INJECT"); on = !(e && !strcmp(e, "0")) && !getenv("DM_THERMAL_NOFALLBACK");
         if (j) { inj0 = atol(j); inj1 = strchr(j, '-') ? atol(strchr(j, '-') + 1) : inj0; } }
     if (!on) return;
     if (atomic_load(&g_scale3d_forced) >= 0) return;   // 菜单定档期间动态控制器不插手 | while the menu has a level pinned, the dynamic controller stays out
-    if (inj0 >= 0) { long f = (long)dm_nvn_frame_count(); iv_ms = f >= inj0 && f <= inj1 ? 25.0 : 16.7; }
+    if (inj0 >= 0) { long f = (long)dm_nvn_frame_count(); int injected = f >= inj0 && f <= inj1; iv_ms = injected ? 25.0 : 16.7; gpu_ms = injected ? 25.0 : 10.0; }
     uint64_t now = now_ns();
     if (atomic_exchange(&g_scale3d_resumed, 0)) scale3d_ctl_hold(&c, now, 3 * S3_SEC);
     { static int was; int in = dm_ingame_now();   // 不在局内（菜单 / 读取）不判；刚进局的 20 秒也不判（进局头十几秒的慢帧是装载，不是 GPU 吃紧） | not judged outside a run (menu / loading); not judged in the first 20 seconds of a run either (slow frames in the first ten-odd seconds of a run are loading, not GPU pressure)
@@ -256,7 +266,7 @@ void dm_3d_scale_feed(double iv_ms) {   // 出图线程每帧调（diag.c dm_per
       double p = mtl_fps_target() == 30 ? 1000.0 / 30 : 0;
       int hz = nvn_present_hz(); if (hz > 0 && hz != 60) p = 1000.0 / hz;
       if (p != c.period_ms) { c.period_ms = p; scale3d_ctl_hold(&c, now, 2 * S3_SEC); } }   // 帧率档换了：目标周期跟着换，切换后停判 2 秒 | the frame rate preset changed: the target period follows, judging is suspended for 2 seconds after the switch
-    int was = c.level, lv = scale3d_ctl_step(&c, iv_ms, now);
+    int was = c.level, lv = scale3d_ctl_step(&c, iv_ms, gpu_ms, now);
     if (lv != was) LOG("3D 比例控制：窗口帧率 %.1f（目标 %.0f）→ %s到第 %d 级%s", c.last_fps, c.period_ms > 0 ? 1000.0 / c.period_ms : 60.0, lv > was ? "降" : "升", lv, c.need_good ? "（刚升又掉：下次升档要 60 秒）" : "");
     atomic_store(&g_scale3d_level, lv);
 }
@@ -270,9 +280,9 @@ static void scale3d_tick(void) {
         if (e) { char *end; float v = strtof(e, &end); if (end == e || *end || !(v >= 0.5f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.5–1.0）", e); want_cfg = v; }
         for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) main = &g_mod[i];
     }
-    int lv = atomic_load(&g_scale3d_level);   // 动态级：0 = 配置值，1 = 0.72，2 = 0.70（都不高于配置值） | dynamic level: 0 = configured value, 1 = 0.72, 2 = 0.70 (none higher than the configured value)
+    int lv = atomic_load(&g_scale3d_level);   // 动态级：0 = 配置值，自动级逐步降至 0.50 | dynamic level: 0 = configured value; automatic levels descend to 0.50
     int forced = atomic_load(&g_scale3d_forced);   // 菜单定档时以定档值为准，动态级不参与 | a menu-pinned level wins over the dynamic one
-    float dyn = forced >= 0 ? scale3d_preset_target(forced, want_cfg) : lv == 0 ? want_cfg : lv == 1 ? SCALE3D_MID : SCALE3D_MIN; if (dyn > want_cfg) dyn = want_cfg;
+    float dyn = forced >= 0 ? scale3d_preset_target(forced, want_cfg) : scale3d_auto_target(lv, want_cfg);
     float want = dm_nvn_ruler_truth() ? 1.0f : dyn;
     if (want == cur || !main || dm_nvn_frame_count() < 30) return;
     uintptr_t renderer = *(uintptr_t *)(main->base + 0x31e0848); if (!renderer) return;

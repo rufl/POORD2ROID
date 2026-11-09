@@ -7,17 +7,24 @@ static VkPipeline counter_gpu_pipeline;
 static uint32_t counter_gpu_parameters[4];
 static int counter_gpu_initialized,counter_gpu_supported;
 static uint64_t counter_gpu_reports,counter_gpu_fallbacks,counter_gpu_sample_reports;
+static int counter_gpu_parameters_for(unsigned timestamp_bits,float period,uint32_t parameters[4]) {
+    if(!parameters)return 0;
+    uint32_t bits;memcpy(&bits,&period,sizeof bits);
+    unsigned exponent=(bits>>23)&255,shift=exponent<=148?148-exponent:96;
+    if((bits>>31)||!exponent||exponent>148||shift>95||!timestamp_bits||timestamp_bits>64)return 0;
+    // The shader's three 32-bit limbs hold the full 90-bit product (64 timestamp + 26 multiplier bits).
+    // NVN reports a uint64 counter, so the final report intentionally keeps its low 64 bits modulo 2^64.
+    parameters[0]=((bits&0x7fffff)|0x800000)*3;
+    parameters[1]=shift;parameters[2]=timestamp_bits;parameters[3]=0;
+    return 1;
+}
 static void counter_gpu_initialize(void) {
     if(counter_gpu_initialized)return;counter_gpu_initialized=1;
-    float period=(float)gpu_timestamp_period;uint32_t bits;memcpy(&bits,&period,sizeof bits);
-    unsigned exponent=(bits>>23)&255,shift=exponent<=148?148-exponent:96;
-    // 精确 float32 周期转整数有理数；拒绝无法表示的范围，不能近似或截断高位。
-    // Decode the exact float32 period into an integer ratio; reject unsupported ranges rather than approximate or truncate high bits.
-    counter_gpu_supported=!(bits>>31)&&exponent&&exponent<=148&&shift<=95&&gpu_timestamp_bits&&gpu_timestamp_bits<=64&&gpu_timestamp_bits+26<=64+shift;
-    LOG("[vulkan-counter-gpu] supported=%d timestamp_bits=%u period_bits=%#x period_ns=%.9g CPU_fallback_keeps_wait=1",counter_gpu_supported,gpu_timestamp_bits,bits,(double)period);
+    float period=(float)gpu_timestamp_period;
+    // Decode the exact float32 period; the shader performs integer arithmetic without approximation.
+    counter_gpu_supported=counter_gpu_parameters_for(gpu_timestamp_bits,period,counter_gpu_parameters);
+    LOG("[vulkan-counter-gpu] supported=%d timestamp_bits=%u period_ns=%.9g fallback_preserves_wait=1",counter_gpu_supported,gpu_timestamp_bits,(double)period);
     if(!counter_gpu_supported)return;
-    counter_gpu_parameters[0]=((bits&0x7fffff)|0x800000)*3;
-    counter_gpu_parameters[1]=shift;counter_gpu_parameters[2]=gpu_timestamp_bits;counter_gpu_parameters[3]=0;
     VkDescriptorSetLayoutBinding bindings[2]={
         {.binding=0,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.descriptorCount=1,.stageFlags=VK_SHADER_STAGE_COMPUTE_BIT},
         {.binding=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.descriptorCount=1,.stageFlags=VK_SHADER_STAGE_COMPUTE_BIT}};

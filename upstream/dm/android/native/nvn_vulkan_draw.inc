@@ -1,5 +1,6 @@
 // 图形管线与绘制；与描述符/计算绑定分开以便独立优化。
 // Graphics pipelines and draws, separated from descriptor/compute binding for independent optimization.
+#include <math.h>
 static VkBlendFactor blend_factor(unsigned factor) {
     switch(factor){case 1:return VK_BLEND_FACTOR_ZERO;case 2:return VK_BLEND_FACTOR_ONE;case 3:return VK_BLEND_FACTOR_SRC_COLOR;case 4:return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;case 5:return VK_BLEND_FACTOR_SRC_ALPHA;case 6:return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;case 7:return VK_BLEND_FACTOR_DST_ALPHA;case 8:return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;case 9:return VK_BLEND_FACTOR_DST_COLOR;case 10:return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;case 11:return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;case 0x61:return VK_BLEND_FACTOR_CONSTANT_COLOR;case 0x62:return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;case 0x63:return VK_BLEND_FACTOR_CONSTANT_ALPHA;case 0x64:return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;default:return VK_BLEND_FACTOR_ONE;}
 }
@@ -114,7 +115,7 @@ static void draw_graphics_inner(const p_draw *draw,const p_draw_idx *indexed) {
     // 初始化列表的求值顺序在 C 里未定义；第二个集合的动态偏移接在第一个之后，必须按序调用。
     // Initializer-list evaluation order is unspecified in C; the second set's dynamic offsets follow the first,
     // so the two binds must be ordered statements.
-    uint32_t dynamic_offsets[256];unsigned dynamic_count=0;
+    uint32_t *dynamic_offsets=descriptor_workspace.dynamic_offsets;unsigned dynamic_count=0;
     uint64_t bind_phase=dm_cpu_phase_begin();
     VkDescriptorSet sets[2];
     sets[0]=bind_shader(vs,NULL,dynamic_offsets,&dynamic_count);
@@ -161,15 +162,47 @@ static void draw_graphics_inner(const p_draw *draw,const p_draw_idx *indexed) {
     dm_cpu_phase_end(DM_CPU_PHASE_VERTEX,vertex_phase);
     VkPrimitiveTopology primitive=topology(draw?draw->prim:indexed->prim);
     // NVN 范围可反向或为常值，Vulkan 同样允许；默认 0..1 由状态初始化提供。
-    // NVN permits reversed or constant ranges, as does Vulkan; state initialization supplies the 0..1 default.
     float *v=state.viewports.v[0];VkViewport viewport={v[0],v[1],v[2]>0?v[2]:width,v[3]>0?v[3]:height,state.depth_range.n,state.depth_range.f};
-    // 限量记录实际范围供真机定位；最多 12 种，不执行读回或改变渲染。
-    // Bound real-range diagnostics to 12 distinct pairs, without readbacks or rendering changes.
-    static uint64_t depth_ranges_seen[12];static unsigned depth_ranges_count;uint64_t depth_range_bits;
-    if(depth_ranges_count<12){memcpy(&depth_range_bits,&state.depth_range,sizeof depth_range_bits);unsigned i=0;while(i<depth_ranges_count&&depth_ranges_seen[i]!=depth_range_bits)i++;
-        if(i==depth_ranges_count){depth_ranges_seen[depth_ranges_count++]=depth_range_bits;LOG("[vulkan-depth] range=%g,%g test=%u write=%u compare=%u target=%s",viewport.minDepth,viewport.maxDepth,(unsigned)state.depth.dt,(unsigned)state.depth.dw,(unsigned)state.depth.df,state.rt.depth?"depth":"color-only");}}
+    // The game draws each UI pass through a full-target viewport, while its layout
+    // coordinates use the 16:9 logical canvas. Replace that viewport with the canvas
+    // bounds; remapping the full-target viewport's dimensions would leave it oversized.
+    // The signature matches the established NVN UI pass: four vertices, two attributes,
+    // 20-byte stride. World draws keep their original viewport.
+    int ui_draw=0;
+    int ux=0,uy=0,uw=0,uh=0,rw=0,rh=0;
+    if(dm_uiscreen_ingame&&dm_screen_real&&dm_ui_rect&&dm_uiscreen_ingame()&&
+       dm_screen_real(&rw,&rh)&&rw>0&&rh>0&&width==rw&&height==rh&&
+       draw&&!indexed&&dm_ui_draw_signature(draw->count,(int)nattr,(int)state.streams[0].stride)){
+        dm_ui_rect(&ux,&uy,&uw,&uh);
+        if(uw>0&&uh>0){
+            ui_draw=1;
+            dm_ui_safe_viewport(0,0,(float)uw,(float)uh,ux,uy,rw,rh,width,height,
+                                &viewport.x,&viewport.y,&viewport.width,&viewport.height);
+        }
+    }
+    {
+        static unsigned probe_count;
+        if(probe_count<24&&dm_uiscreen_ingame&&dm_screen_real&&dm_ui_rect&&dm_uiscreen_ingame()&&
+           dm_screen_real(&rw,&rh)&&rw>0&&rh>0&&width==rw&&height==rh&&
+           draw&&!indexed&&dm_ui_draw_signature(draw->count,(int)nattr,(int)state.streams[0].stride)){
+            dm_ui_rect(&ux,&uy,&uw,&uh);
+            LOG("[vulkan-ui-probe] draw=%llu target=%ux%u real=%dx%d ui=%dx%d@%d,%d signature=%d mapped=%d vp=%.2f,%.2f %.2fx%.2f sc=%d,%d %dx%d depth=%d",
+                (unsigned long long)draw_count,width,height,rw,rh,uw,uh,ux,uy,
+                draw&&!indexed?dm_ui_draw_signature(draw->count,(int)nattr,(int)state.streams[0].stride):0,
+                ui_draw,v[0],v[1],v[2],v[3],state.scissor.x,state.scissor.y,state.scissor.w,state.scissor.h,
+                state.rt.depth!=0);
+            probe_count++;
+        }
+    }
+
+    // Apply the same safe-rect mapping and clipping to every matching UI draw.
     VkRect2D scissor=graphics_scissor_clip(state.scissor,width,height);
-    // Metal 的裁剪空间 Y 向上，Vulkan 的正高度视口 Y 向下；用负高度保持 NVN 画面方向。
+    if(ui_draw){
+        int sx,sy,sw,sh;
+        dm_ui_safe_scissor(state.scissor.x,state.scissor.y,state.scissor.w,state.scissor.h,
+                           ux,uy,uw,uh,rw,rh,width,height,&sx,&sy,&sw,&sh);
+        scissor=(VkRect2D){{sx,sy},{(uint32_t)sw,(uint32_t)sh}};
+    }
     // Metal clip Y points up while Vulkan's positive viewport points down; a negative viewport preserves NVN orientation.
     viewport.y += viewport.height; viewport.height = -viewport.height;
     uint64_t pipe_phase=dm_cpu_phase_begin();

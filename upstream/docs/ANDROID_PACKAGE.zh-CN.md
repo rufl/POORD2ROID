@@ -26,13 +26,14 @@ d2r-package.zip
 │   ├── sdk.gates.tsv             │
 │   ├── subsdk0.fixups.tsv        │
 │   └── subsdk0.gates.tsv         ┘
-├── romfs/                        游戏资源（原样）
+├── romfs/                        原始游戏资源
 │   └── data/*.data, *.psv
+├── romfs_overlay/                可选：界面与配置补丁
+│   └── data/.build.config + *.data
 ├── shaders/                      翻译后的着色器
 │   ├── host-subgroup-size.txt    分组档位，必须与实际 GPU 策略一致
 │   └── <key>.spv / <key>.meta
 └── derived.tsv                   三张游戏派生表的内容（壳模式的 APK 里只有空表与条数）
-```
 
 `manifest.json` 示例：
 
@@ -42,12 +43,15 @@ d2r-package.zip
   "created": "2026-10-17T01:20:00Z",
   "source": "user-supplied game files",
   "subgroup_size": 64,
-  "counts": { "game": 9, "romfs": 45, "shaders": 20795, "derived": 746 },
-  "bytes": { "game": 79436432, "romfs": 8400000000, "shaders": 507000000, "derived": 24000 }
+  "counts": { "game": 9, "romfs": 45, "romfs_overlay": 2, "shaders": 20795, "derived": 746 },
+  "bytes": { "game": 79436432, "romfs": 8400000000, "romfs_overlay": 1500000, "shaders": 507000000, "derived": 24000 }
 }
 ```
 
 `format` 是包格式版本。手机端遇到不认识的版本必须**明确报错并拒绝导入**，不能猜。
+
+`romfs_overlay` 是可选组，旧包仍可导入。`make_package.py` 默认不生成游戏界面 overlay，因此保留原始字体和布局。需要自定义 overlay 时，使用 `build_package.py assemble --romfs-overlay ...` 显式加入。
+旧版 Android 数据包可能包含 1.5× 字体 overlay；重新导入一个不含 `romfs_overlay` 的新包会清除旧 overlay。仅覆盖安装 APK 不会改动已导入的 RomFS。
 
 ## derived.tsv：三张游戏派生表（壳模式）
 
@@ -71,16 +75,16 @@ APK 里**不含**三张从游戏文件生成的表的内容（编年史仓库物
 
 ```
 内部目录（可执行）  <internalDataPath>/d2r-package/game/          模块与加载布局，约 80 MB
-外部目录（大容量）  <externalDataPath>/d2r-package/romfs/         游戏资源，约 8.4 GB
+外部目录（大容量）  <externalDataPath>/d2r-package/romfs/         原始游戏资源，约 8.4 GB
+                    <externalDataPath>/d2r-package/romfs_overlay/ 补丁界面资源，可选
                     <externalDataPath>/d2r-package/shaders/       翻译后的着色器，约 0.5 GB
                     <externalDataPath>/d2r-package/manifest.json  完成标记
-```
 
 **为什么必须分开**：外部存储是 `noexec` 挂载（实测 `/storage/emulated` 带 `noexec`），从那里 `dlopen` 会失败；
 而模块必须以动态库形式装入。内部存储没有这个限制 —— 图形驱动就是从 `files/temp/driver/` 加载的，那是已验证的路径。
 反过来，内部数据目录放不下 8.4 GB 的资源，所以大数据走外部。
 
-启动时如果外部目录里有 `manifest.json`，就用它指向的这三份数据，否则回落到 APK 自带与手工推送的默认位置。
+启动时如果外部目录里有 `manifest.json`，就使用导入包里的模块、RomFS、overlay 与着色器，否则回落到 APK 自带与手工推送的默认位置。
 这样"导入过"和"没导入过"两条路都成立，且**不需要在配置里写任意路径**（现有配置解析器的键白名单与"不接受任意路径"的设计保持不变）。
 
 **导入是原子的**：旧的 `manifest.json` 先删、新的最后才写。中途失败（空间不足、取消、zip 损坏）留下的是一个

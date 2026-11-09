@@ -1,29 +1,26 @@
-// 游戏有一对「屏幕宽高」全局量 [main+0x211da38]（两个 32 位）：界面按其中的「高」定缩放、按宽高定摆位矩形；3D 出图与命中框不看它（实验，
-// 实验得出）。画面比 16:9 窄时把「高」写成 宽÷16×9，界面就完整落在 16:9 里、3D 仍铺满；界面是贴着画面顶边画的，
-// 要居中 / 贴底由图形层把界面那一趟绘制整体下移 dm_ui_rect 给的 y（界面独占一趟、帧末合成，量过）。
-// 写这对量的只有游戏的窗口初始化（main+0xe10e8c、0xe12ecc，切主机 / 掌机档会再走）。这里不逐个找时机，每帧比一次：
-// 全局量不等于我们上次写的值 = 游戏刚重写过 → 记下新的真实值、再写一次。
-// 配套：点世界按真实画面算（dm_world.c 用 dm_screen_real）；dm_ui_* 的入口吃的是「界面矩形里的归一化坐标」，由调用方（触摸前端 / 测试点按通路）换算。
-// 缺省关。打开：前端调 dm_uiscreen_enable；Mac 宿主测试用环境变量 DM_UI_169=1（等于贴顶）与 DM_UI_YPOS=top | center | bottom。
-// The game has a pair of "screen width / height" globals [main+0x211da38] (two 32-bit values): the UI derives its scale from the "height" and its placement rectangle from width and height; 3D rendering and hit boxes do not look at it (experiment,
-// obtained by experiment). When the frame is narrower than 16:9, write "height" as width÷16×9, and the UI falls entirely within 16:9 while 3D still fills the screen; the UI is drawn flush with the top edge of the frame,
-// so centering / bottom-aligning is done by the graphics layer shifting the whole UI draw pass down by the y given by dm_ui_rect (the UI has a pass of its own, composited at end of frame; measured).
-// The only writer of this pair is the game's window initialization (main+0xe10e8c, 0xe12ecc; switching docked / handheld mode goes through it again). Rather than hunting for each occasion, compare once per frame here:
-// globals not equal to the value we last wrote = the game has just rewritten them → record the new real values and write once more.
-// Companion pieces: world taps are computed on the real frame (dm_world.c uses dm_screen_real); the dm_ui_* entry points take "normalized coordinates within the UI rectangle", converted by the caller (touch front end / test tap path).
-// Off by default. To turn on: the front end calls dm_uiscreen_enable; for Mac host testing use the environment variables DM_UI_169=1 (equivalent to top-aligned) and DM_UI_YPOS=top | center | bottom.
+// The game UI uses screen-width/height globals. Keep its logical canvas at 16:9 on both narrow and wide targets;
+// the world render target and world-touch coordinates remain full-size. Android Vulkan maps the isolated UI draw pass
+// into this centered safe rectangle. Front-end/loading output remains the game's native 16:9 layout.
+// 游戏 UI 使用屏幕宽高全局量。宽、窄屏均将逻辑画布保持为 16:9；世界渲染目标与世界触点仍使用全尺寸。
+// Android Vulkan 将独立 UI 绘制通道映射到居中的安全矩形；前端/读取画面保持原生 16:9。
 #include "dm_uiscreen.h"
+#include "dm_uiscreen_geometry.h"
 #include "hle.h"
 #include "dm.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
-static _Atomic int g_mode = -1;              // -1 = 还没定（第一次用时看环境变量） | -1 = not decided yet (checks the environment variable on first use)
-static _Atomic int g_rw, g_rh, g_uh;         // 真实宽高、写给游戏的界面高；g_rw == 0 = 没在改写 | Real width and height, and the UI height written to the game; g_rw == 0 = not rewriting
+static _Atomic int g_mode = -1;              // -1 = not decided (checks explicit UI setting and configured output aspect)
+static _Atomic uint64_t g_surface_size, g_presented_size;
+static _Atomic int g_rw, g_rh, g_uw, g_uh;
 static uint8_t *main_base(void) { static uint8_t *b; if (!b) for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) b = (uint8_t *)g_mod[i].base; return b; }
 static int mode(void) { int m = atomic_load(&g_mode); if (m >= 0) return m;
-    const char *e = getenv("DM_UI_169"), *p = getenv("DM_UI_YPOS"); m = !(e && strcmp(e, "0")) ? DM_UISCREEN_OFF : p && !strcmp(p, "center") ? DM_UISCREEN_CENTER : p && !strcmp(p, "bottom") ? DM_UISCREEN_BOTTOM : DM_UISCREEN_TOP;
+    const char *e = getenv("DM_UI_169"), *p = getenv("DM_UI_YPOS"), *r = getenv("DM_GAME_RES"); unsigned w = 0, h = 0;
+    int wide = r && sscanf(r, "%ux%u", &w, &h) == 2 && h && (uint64_t)w * 9 > (uint64_t)h * 16;
+    m = e ? (strcmp(e, "0") ? p && !strcmp(p, "center") ? DM_UISCREEN_CENTER : p && !strcmp(p, "bottom") ? DM_UISCREEN_BOTTOM : DM_UISCREEN_TOP : DM_UISCREEN_OFF)
+          : wide ? DM_UISCREEN_TOP : DM_UISCREEN_OFF;
     int exp = -1; atomic_compare_exchange_strong(&g_mode, &exp, m); return atomic_load(&g_mode); }
 void dm_uiscreen_enable(int m) { atomic_store(&g_mode, m < DM_UISCREEN_OFF || m > DM_UISCREEN_BOTTOM ? DM_UISCREEN_OFF : m); }
 // 局内 / 局外（前端各页是按 16:9 整页设计的——点击区、标题、3D 人物是一体——整页居中留边；真全屏只在局内开）。
@@ -54,60 +51,106 @@ static int yoff(void) { int rh = atomic_load(&g_rh), uh = atomic_load(&g_uh), m 
 // 跟着世界走的界面字（地上物品名、NPC 名字牌、血条、飘字）：游戏用镜头的「世界点 → 屏幕」main+0x1237c60(镜头, 点, out) 算出真实画面像素（y = [镜头+0x144] × (0.5 − 0.5·ndc_y)），
 // 直接当界面坐标用（调用方只有 0x90d110 四处与 0xa71bb0）。界面整趟下移 y0 之后这些字就低了 y0（名字牌落到脚下）。
 // 镜头对象同时是出图用的，投影矩阵（+0x80 起 4 列）每帧由 0x162f9ac 无条件重算，往对象里写值留不住也不该写。所以在函数入口（观测门 OBS_UI_PROJECT，只在 touch 规则域）
-// 把 x0 换成镜头的一份副本，副本的投影每列 y += (2·y0 / 高) × 该列 w ⇒ 出来的 y 正好少 y0；游戏的镜头一个字节不动。y0 = 0（没开 / 贴顶 / 16:9 屏）时不换。
+// 把 x0 换成镜头的一份副本：宽屏时水平投影系数乘「逻辑宽 / 实际宽」（20:9 时 0.8），显示更多横向场景，不动垂直缩放；y += (2·y0 / 高) × w 将画面下移 y0。游戏的镜头一个字节不动。y0 = 0 时不换。
 // UI text that follows the world (ground item names, NPC nameplates, health bars, floating text): the game uses the camera's "world point → screen" main+0x1237c60(camera, point, out) to compute real frame pixels (y = [camera+0x144] × (0.5 − 0.5·ndc_y)),
 // and uses them directly as UI coordinates (the only callers are four sites in 0x90d110 and 0xa71bb0). Once the whole UI pass is shifted down by y0, this text ends up y0 too low (nameplates land at the feet).
-// The camera object is also used for rendering, and the projection matrix (4 columns from +0x80) is unconditionally recomputed every frame by 0x162f9ac, so values written into the object would not stick and should not be written anyway. So at the function entry (observation gate OBS_UI_PROJECT, only in the touch rule domain)
-// swap x0 for a copy of the camera, with each projection column of the copy getting y += (2·y0 / height) × that column's w ⇒ the resulting y is smaller by exactly y0; not one byte of the game's camera is changed. When y0 = 0 (off / top-aligned / 16:9 screen), no swap.
+// The camera object is also used for rendering, and the projection matrix (4 columns from +0x80) is unconditionally recomputed every frame by 0x162f9ac, so writing it directly would not stick. At the observation gate (OBS_UI_PROJECT, touch-rule domain only),
+// substitute a copy: multiply horizontal projection by logical_width / real_width (0.8 at 20:9) to reveal more scene without changing vertical scale, and add y += (2*y0 / height) * w to shift the image down by exactly y0. The game camera remains untouched; when y0 is zero, no copy is needed.
 static _Atomic int g_proj_on;
 static void ui_project_obs(const uint64_t *regs) {
-    int dy = atomic_load(&g_ingame) ? yoff() : 0; const uint8_t *c = (const uint8_t *)(uintptr_t)regs[0]; if (!dy || !c || c[0x160]) return;   // +0x160 = 投影待重算：函数自己会重算并盖掉副本里的偏移，这一次不换（只在改分辨率后的第一次调用） | +0x160 = projection pending recompute: the function will recompute it itself and overwrite the offset in the copy, so do not swap this time (only on the first call after a resolution change)
+    const uint8_t *c = (const uint8_t *)(uintptr_t)regs[0]; if (!c || c[0x160]) return;
+    int rw = atomic_load(&g_rw), uw = atomic_load(&g_uw);
+    int horizontal = atomic_load(&g_proj_on) && atomic_load(&g_ingame) && uw > 0 && rw > uw;
+    int dy = atomic_load(&g_proj_on) && atomic_load(&g_ingame) ? yoff() : 0; if (!horizontal && !dy) return;
     float H = *(const float *)(c + 0x144); if (!(H > 0)) return;
-    static _Thread_local _Alignas(16) uint8_t cam[0x170]; memcpy(cam, c, sizeof cam); float *m = (float *)(cam + 0x80), k = 2.0f * dy / H;
-    for (int j = 0; j < 4; j++) m[j * 4 + 1] += k * m[j * 4 + 3];
+    static _Thread_local _Alignas(16) uint8_t cam[0x170]; memcpy(cam, c, sizeof cam); float *m = (float *)(cam + 0x80);
+    float sx = horizontal ? dm_ui_world_x_scale(uw, rw) : 1.f, sy = 2.0f * dy / H;
     ((uint64_t *)(uintptr_t)regs)[0] = (uint64_t)(uintptr_t)cam;
 }
 int dm_ui_proj_dy(void) { return atomic_load(&g_proj_on) && atomic_load(&g_ingame) ? yoff() : 0; }
 
 // 游戏的出图分辨率（主机 / 掌机档各一个参数位，见 thread.c 与 hle_oe.c）：真全屏打开时按「玩家单位在不在」给值——不在（前端各页）= 屏宽的 16:9，
-// 游戏整个按 16:9 出图，3D、界面、点击区天然一致（就是留边模式）；在 = 屏幕原生比例。状态一变推一次「性能模式变化」通知（31），游戏重读参数位、改出图尺寸。
-// 玩家单位的建立 / 销毁都落在读取画面期间；读取画面期间界面矩形是居中的 16:9（dm_uiscreen_ingame 为 0），所以读取画面肉眼位置不变。
-// The game's render resolution (one parameter slot each for docked / handheld mode, see thread.c and hle_oe.c): with true fullscreen on, the value is given by "whether the player unit exists" - absent (front end pages) = 16:9 of the screen width,
-// the game renders entirely at 16:9, and 3D, UI and tap areas are naturally consistent (this is just letterbox mode); present = the screen's native aspect ratio. Whenever the state changes, push one "performance mode changed" notification (31), and the game rereads the parameter slot and changes the render size.
-// The player unit's creation / destruction both fall within the loading screen; during the loading screen the UI rectangle is a centered 16:9 (dm_uiscreen_ingame is 0), so the loading screen does not visibly move.
+// 配置出图档位是局内分辨率。超宽档启动及菜单/读取页使用同宽的 16:9 高度，确保初始目标容纳两种模式。
+// 建立玩家单位后通过现有性能模式通知切到配置的超宽分辨率；销毁后切回。游戏按各自比例排界面，呈现层不拉伸。
+// The output profile is the in-world render size. For a configured aspect wider than 16:9, startup and
+// menu/loading output uses the same width at 16:9 height, so the initial target can contain both modes.
+// Player-unit creation switches to the configured wide size through the existing performance-mode notification;
+// destroying it switches back. The game lays out UI for each aspect, and the presenter preserves it without stretch.
 uint64_t front_game_res(int docked); void dm_oe_res_changed(void);
 // 游戏处理 31 时拿「屏幕宽高」全局量和新分辨率比（main+0xe10e10），相同就不切。出局时这对量里还是我们写的 16:9 高，正好等于要切去的值，游戏会以为已经切好了。
 // 所以在游戏取走 31 的那一刻（hle_oe.c，同一个线程、紧挨着它的比较之前）把真实高写回：同一帧里写回、比较、切换、游戏自己写成新值，中间没有一帧按 4:3 排界面。
 // When handling 31 the game compares the "screen width / height" globals with the new resolution (main+0xe10e10) and does not switch if they are equal. On leaving a run this pair still holds the 16:9 height we wrote, which happens to equal the value to switch to, so the game would think the switch is already done.
 // So at the moment the game takes 31 (hle_oe.c, same thread, right before its comparison) write the real height back: within the same frame come the write-back, comparison, switch, and the game writing the new value itself, with not a single frame laying out the UI at 4:3 in between.
-void dm_uiscreen_res_reread(void) { uint8_t *b = main_base(); int rw = atomic_load(&g_rw); if (!b || !rw) return; int32_t *g = (int32_t *)(b + 0x211da38);
-    if (g[0] == rw && g[1] == atomic_load(&g_uh)) g[1] = atomic_load(&g_rh); atomic_store(&g_rw, 0); }
-// 游戏处理 31 时（main+0xe10df0–0xe10e0c）只接受「宽高都不超过窗口初始化时的尺寸 [main+0x211da30]」的新值：窗口贴图按启动时的参数位一次建好，之后只在里面改出图区域。
-// 所以启动时给屏幕原生值（最大的那个），窗口初始化完、界面每帧那一处第一次跑到时再切到前端的 16:9。
-// When handling 31 (main+0xe10df0–0xe10e0c) the game only accepts new values where "both width and height do not exceed the size at window initialization [main+0x211da30]": the window texture is created once from the startup parameter slot, and afterwards only the render region inside it changes.
-// So give the screen's native value (the largest one) at startup, and switch to the front end's 16:9 once window initialization is done and the per-frame UI site first runs.
+void dm_uiscreen_res_reread(void) {
+    uint8_t *b = main_base(); int rw = atomic_load(&g_rw); if (!b || !rw) return; int32_t *g = (int32_t *)(b + 0x211da38);
+    if (g[0] == atomic_load(&g_uw) && g[1] == atomic_load(&g_uh)) { g[0] = rw; g[1] = atomic_load(&g_rh); }
+    atomic_store(&g_rw, 0);
+}
+// Menu/loading output stays 16:9. In-game UI globals use a centered 16:9 logical canvas while the render target
+// remains wide; dm_ui_rect is the single physical mapping used by the UI renderer and UI-coordinate input.
 static _Atomic int g_world, g_res_live;
-uint64_t dm_game_res(int docked) { uint64_t r = front_game_res(docked); uint32_t w = (uint32_t)r, h = (uint32_t)(r >> 32);   // 先问前端：iOS 前端在第一次被问时才决定开不开真全屏 | Ask the front end first: the iOS front end only decides whether to turn on true fullscreen the first time it is asked
-    if (atomic_load(&g_res_live) && mode() != DM_UISCREEN_OFF && !atomic_load(&g_world) && (uint64_t)w * 9 < (uint64_t)h * 16) h = (uint32_t)((uint64_t)w * 9 / 16) & ~1u;
-    return (uint64_t)h << 32 | w; }
+uint64_t dm_game_res(int docked) {
+    uint64_t r = front_game_res(docked); uint32_t w = (uint32_t)r, h = (uint32_t)(r >> 32);
+    if (mode() != DM_UISCREEN_OFF && !atomic_load(&g_world)) {
+        if ((uint64_t)w * 9 > (uint64_t)h * 16) h = (uint32_t)((uint64_t)w * 9 / 16) & ~1u;
+        else if (atomic_load(&g_res_live) && (uint64_t)w * 9 < (uint64_t)h * 16) h = (uint32_t)((uint64_t)w * 9 / 16) & ~1u;
+    }
+    return (uint64_t)h << 32 | w;
+}
 
 void dm_uiscreen_pump(void) {
     uint8_t *b = main_base(); if (!b) return;
     { int world = ((uint64_t (*)(uint32_t))(b + 0x45f9d0))(*(uint32_t *)(b + 0x2d20e4c)) != 0;
       int first = !atomic_exchange(&g_res_live, 1);
       if ((atomic_exchange(&g_world, world) != world || (first && !world)) && mode() != DM_UISCREEN_OFF) { LOG("界面画面：%s → 游戏分辨率切到 %u x %u", world ? "玩家单位建立" : first ? "窗口已建好、在前端" : "玩家单位销毁", (unsigned)dm_game_res(1), (unsigned)(dm_game_res(1) >> 32)); dm_oe_res_changed(); } }
-    static int reg; if (!reg) { reg = 1; if (gate_obs_present(OBS_UI_PROJECT)) { gate_obs_set(OBS_UI_PROJECT, ui_project_obs); atomic_store(&g_proj_on, 1); } } int32_t *g = (int32_t *)(b + 0x211da38); int m = mode(), rw = atomic_load(&g_rw);
-    if (!atomic_load(&g_world) && m != DM_UISCREEN_OFF) return;   // 不在局里：游戏自己按 16:9 出图，这对量不改写（出局那一下的写回见 dm_uiscreen_res_reread） | Not in a run: the game renders at 16:9 by itself, so this pair of values is not rewritten (for the write-back at the moment of leaving a run see dm_uiscreen_res_reread)
-    if (m == DM_UISCREEN_OFF) { if (rw) { if (g[0] == rw && g[1] == atomic_load(&g_uh)) g[1] = atomic_load(&g_rh); atomic_store(&g_rw, 0); LOG("界面画面：关掉，屏幕高写回 %d", g[1]); } return; }   // 没打开过就什么都不碰 | If it was never turned on, touch nothing
+    static int reg; if (!reg) { reg = 1; if (gate_obs_present(OBS_UI_PROJECT)) { gate_obs_set(OBS_UI_PROJECT, ui_project_obs); atomic_store(&g_proj_on, 1); } }
+    int32_t *g = (int32_t *)(b + 0x211da38); int m = mode(), rw = atomic_load(&g_rw);
+    if (!atomic_load(&g_world) && m != DM_UISCREEN_OFF) return;
+    if (m == DM_UISCREEN_OFF) {
+        if (rw) { if (g[0] == atomic_load(&g_uw) && g[1] == atomic_load(&g_uh)) { g[0] = rw; g[1] = atomic_load(&g_rh); } atomic_store(&g_rw, 0); LOG("界面画面：关掉，屏幕宽高写回 %d x %d", g[0], g[1]); }
+        return;
+    }
     int w = g[0], h = g[1]; if (w <= 0 || h <= 0) return;
-    if (rw && w == rw && h == atomic_load(&g_uh)) return;   // 还是我们上次写的值 | Still the value we wrote last time
-    static int n; int uh = h; if ((long)w * 9 < (long)h * 16) { uh = (int)((long)w * 9 / 16) & ~1; g[1] = uh; }
-    atomic_store(&g_rh, h); atomic_store(&g_uh, uh); atomic_store(&g_rw, w);
-    LOG("界面画面：游戏写入屏幕宽高 %d x %d（第 %d 次）→ 界面用 %d x %d，纵向位置 %d", w, h, ++n, w, uh, yoff());
+    if (rw && w == atomic_load(&g_uw) && h == atomic_load(&g_uh)) return;
+#ifdef __ANDROID__
+    int uw, uh; dm_ui_safe_size(w, h, &uw, &uh);
+#else
+    int uw = w, uh = h; if ((long)w * 9 < (long)h * 16) uh = (int)((long)w * 9 / 16) & ~1;
+#endif
+    atomic_store(&g_rw, w); atomic_store(&g_rh, h); atomic_store(&g_uw, uw); atomic_store(&g_uh, uh);
+    g[0] = uw; g[1] = uh;
+    LOG("界面画面：游戏屏幕 %d x %d → UI 逻辑画布 %d x %d，安全矩形 x=%d y=%d", w, h, uw, uh, (w - uw) / 2, yoff());
 }
-int dm_screen_real(int *w, int *h) { int rw = atomic_load(&g_rw);
-    if (rw) { *w = rw; *h = atomic_load(&g_rh); return 1; }
-    uint8_t *b = main_base(); if (!b) return 0; *w = *(int32_t *)(b + 0x211da38); *h = *(int32_t *)(b + 0x211da3c); return *w > 0 && *h > 0; }   // 没在改写：就是游戏的值（与改之前逐字节同） | Not rewriting: it is simply the game's value (byte-for-byte the same as before the change)
-void dm_ui_rect(int *x, int *y, int *w, int *h) { int rw = 0, rh = 0; dm_screen_real(&rw, &rh); *x = 0; *y = yoff(); *w = rw; *h = atomic_load(&g_rw) ? atomic_load(&g_uh) : rh; }
-float dm_ui_ny(float ny) { int x, y, w, h, rw = 0, rh = 0; dm_ui_rect(&x, &y, &w, &h); if (!dm_screen_real(&rw, &rh) || h <= 0 || h == rh) return ny; return (ny * rh - y) / h; }
-float dm_ui_ny_back(float ny) { int x, y, w, h, rw = 0, rh = 0; dm_ui_rect(&x, &y, &w, &h); if (!dm_screen_real(&rw, &rh) || rh <= 0 || h == rh) return ny; return (ny * h + y) / rh; }
+int dm_screen_real(int *w, int *h) {
+    int rw = atomic_load(&g_rw); if (rw) { *w = rw; *h = atomic_load(&g_rh); return 1; }
+    uint8_t *b = main_base(); if (!b) return 0; *w = *(int32_t *)(b + 0x211da38); *h = *(int32_t *)(b + 0x211da3c); return *w > 0 && *h > 0;
+}
+void dm_uiscreen_surface_size(int width, int height) {
+    uint64_t size = width > 0 && height > 0 ? (uint64_t)(uint32_t)width << 32 | (uint32_t)height : 0;
+    atomic_store(&g_surface_size, size);
+}
+void dm_uiscreen_presented_size(int width, int height) {
+    uint64_t size = width > 0 && height > 0 ? (uint64_t)(uint32_t)width << 32 | (uint32_t)height : 0;
+    atomic_store(&g_presented_size, size);
+}
+void dm_ui_screen_to_game(float screen_x, float screen_y, float *game_x, float *game_y) {
+    uint64_t surface = atomic_load(&g_surface_size), image = atomic_load(&g_presented_size);
+    int surface_w = (int)(surface >> 32), surface_h = (int)(uint32_t)surface;
+    int source_w = (int)(image >> 32), source_h = (int)(uint32_t)image;
+    if (!image) dm_screen_real(&source_w, &source_h);
+    if (!source_w || !source_h || !surface_w || !surface_h) {
+        *game_x = screen_x; *game_y = screen_y; return;
+    }
+    int x, y, width, height;
+    dm_ui_fit_rect(source_w, source_h, surface_w, surface_h, &x, &y, &width, &height);
+    *game_x = dm_ui_surface_to_source(screen_x, surface_w, x, width);
+    *game_y = dm_ui_surface_to_source(screen_y, surface_h, y, height);
+}
+void dm_ui_rect(int *x, int *y, int *w, int *h) {
+    int rw = 0, rh = 0; dm_screen_real(&rw, &rh); int uw = atomic_load(&g_rw) ? atomic_load(&g_uw) : rw;
+    *x = (rw - uw) / 2; *y = yoff(); *w = uw; *h = atomic_load(&g_rw) ? atomic_load(&g_uh) : rh;
+}
+float dm_ui_nx(float nx) { int x,y,w,h,rw=0,rh=0; dm_ui_rect(&x,&y,&w,&h); if (!dm_screen_real(&rw,&rh)) return nx; return dm_ui_safe_forward(nx,x,w,rw); }
+float dm_ui_nx_back(float nx) { int x,y,w,h,rw=0,rh=0; dm_ui_rect(&x,&y,&w,&h); if (!dm_screen_real(&rw,&rh)) return nx; return dm_ui_safe_inverse(nx,x,w,rw); }
+float dm_ui_ny(float ny) { int x,y,w,h,rw=0,rh=0; dm_ui_rect(&x,&y,&w,&h); if (!dm_screen_real(&rw,&rh)) return ny; return dm_ui_safe_forward(ny,y,h,rh); }
+float dm_ui_ny_back(float ny) { int x,y,w,h,rw=0,rh=0; dm_ui_rect(&x,&y,&w,&h); if (!dm_screen_real(&rw,&rh)) return ny; return dm_ui_safe_inverse(ny,y,h,rh); }

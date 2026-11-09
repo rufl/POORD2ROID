@@ -242,11 +242,13 @@ port默认DM_OPMODE=1 Console/Boost，front_game_res(1)=1600×900，最新营地
 
 真机验证（2026-10-18）：界面切换 → 点启动 → `[vulkan-loader] requested=Turnip selected=Turnip identity verified`（`PurpleVK 26.3.0-devel`、`shader host subgroup=64 matches`）；切回系统驱动 → 配置被删除 → `driver configuration not found` → `requested=system selected=system`。
 
-## 三种 Vulkan 后端（System / PanVK / Turnip）
+## Vulkan 后端（System / MaliSX2 / PanVK / Turnip）
 
-启动器提供三种模式：`system` 是始终可选的系统 Vulkan；`panvk` 是 JimVulkan PanVK r9，仅在 Android API 31+ 且存在 `/dev/mali0` 的 Mali kbase 设备显示；`turnip` 是内置 Turnip T30，仅在存在 `/dev/kgsl-3d0` 且满足 API30 时显示。因此 Xiaomi 11T（Mali-G77 MC9）可选择系统驱动或实验性 PanVK；Turnip 仍随 APK 保留，但不会伪装成 Mali 可用选项。
+启动器提供四种模式：`system` 始终可选；`malisx2` 是 bmdhacks MaliSX2 0.4.0，仅在 Android API 29+ 且存在 `/dev/mali0` 时显示；`panvk` 是 JimVulkan PanVK r9，仅在 Android API 31+ 且存在 `/dev/mali0` 时显示；`turnip` 是内置 Turnip T30，仅在 API 30+ 且存在 `/dev/kgsl-3d0` 时显示。因此 Xiaomi 11T 应显示 System、MaliSX2、PanVK，不显示 Turnip。
 
-PanVK 包来自 [JimVulkan mali-panvk v1.5.0 / r9](https://github.com/JimVulkan/mali-panvk/releases/tag/v1.5.0)，构建固定校验 ZIP 与 `.so` SHA-256，并随 APK 分发上游 `NOTICE.txt`。r9 声明 Android API 31+，上游列出 Mali-G77 支持。native 端通过 AdrenoTools 注入 Android 平台 Vulkan loader，并严格要求最终 `driverID` 为 `VK_DRIVER_ID_MESA_PANVK`；PanVK namespace 会链接 Android 平台依赖，不把私有系统 `.so` 复制进 APK。启动器与 native loader 均严格 `require_custom=1`，加载失败不暗中切换；`system` 仍是玩家主动选择的回退。
+MaliSX2 包来自 [上游 v0.4.0](https://github.com/bmdhacks/malisx2/releases/tag/v0.4.0)，锁定提交 `63e307e63aa6798137f8c660e965403973159296`，构建同时验证 ZIP 和 `.so` SHA-256，APK 附带 MIT 许可证与 notice。上游列出 Mali-G77，但报告是在其他设备上测试；它是面向特定 Android Vulkan 应用的实验性驱动，不代表兼容 D2R。该版本未实现 MSAA。Native loader 不只验证 ARM vendor driver ID，还要求 GPU vendor `0x13b5` 且 `driverInfo` 标记 `malisx2`，避免把系统 Mali 驱动误认成已加载 MaliSX2。选择后使用 `require_custom=1`，身份或初始化失败即报错，不会暗中回退；玩家可主动切回 System 或 PanVK。
+
+PanVK 包来自 [JimVulkan mali-panvk v1.5.0 / r9](https://github.com/JimVulkan/mali-panvk/releases/tag/v1.5.0)，构建固定校验 ZIP 与 `.so` SHA-256，并随 APK 分发上游 `NOTICE.txt`。r9 声明 Android API 31+，上游列出 Mali-G77 支持。native 端通过 AdrenoTools 注入 Android 平台 Vulkan loader，并严格要求最终 `driverID` 为 `VK_DRIVER_ID_MESA_PANVK`；PanVK namespace 会链接 Android 平台依赖，不把私有系统 `.so` 复制进 APK。选择失败不暗中切换；`system` 仍是显式回退。
 
 历史记录：以下 r8 / FristOneRR 设备验证只代表旧版直接 ICD 加载路径，不代表当前 r9 的 Android 平台 loader 路径。
 

@@ -494,7 +494,10 @@ static uint64_t async_commit_locked(void) {
     VK_CHECK(vkResetFences(device,1,&batch->fence));
     VkSubmitInfo submit={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&batch->command};
     VkPipelineStageFlags present_stage=VK_PIPELINE_STAGE_TRANSFER_BIT;
-    if(screen_submission){submit.waitSemaphoreCount=1;submit.pWaitSemaphores=&screen_acquired;submit.pWaitDstStageMask=&present_stage;submit.signalSemaphoreCount=1;submit.pSignalSemaphores=&screen_rendered;}
+    if(screen_submission){
+        if(!screen_acquired||screen_acquire_slot>=screen_acquire_slots||!screen_acquired[screen_acquire_slot])die("Vulkan present acquire semaphore state");
+        submit.waitSemaphoreCount=1;submit.pWaitSemaphores=&screen_acquired[screen_acquire_slot];submit.pWaitDstStageMask=&present_stage;submit.signalSemaphoreCount=1;submit.pSignalSemaphores=&screen_rendered;
+    }
     #ifdef DM_VK_REFERENCE_GATES
     reference_gate_submit(&submit);
 #endif

@@ -57,6 +57,48 @@ def run(args, **kwargs):
 PANVK_ARCHIVE_SHA256 = "04d82e2f35e4e80138f9a407ec4222e40908b32196eb7484355993e6c5fdc376"
 PANVK_LIBRARY_SHA256 = "6baf04f6075fe57d0dc1738039cf91d8db6ce98c9203dd9dc3d638f42c49e62a"
 
+MALISX2_ARCHIVE_SHA256 = "835f980506ed46fa51925fd279b256d23b0ddf481ffd1ab39be2fee275cf8bf8"
+MALISX2_LIBRARY_SHA256 = "0148e1ea6263653ef376007274eefdf1d58fb63eadf66e2290c6cc49219c0365"
+
+
+def package_malisx2(archive_path, assets, licenses):
+    if not archive_path.is_file():
+        sys.exit("Missing MaliSX2 package: " + str(archive_path))
+    if sha256_file(archive_path) != MALISX2_ARCHIVE_SHA256:
+        sys.exit("MaliSX2 package checksum mismatch: " + str(archive_path))
+    output = assets / "malisx2"
+    output.mkdir(parents=True, exist_ok=True)
+    temporary = output / "libvulkan_malisx2.so.pending"
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            metadata = json.loads(archive.read("meta.json"))
+            if (metadata.get("name") != "malisx2 0.4.0 (63e307e63a)"
+                    or metadata.get("packageVersion") != "0.4.0+63e307e63a"
+                    or metadata.get("minApi") != 29
+                    or metadata.get("libraryName") != "libvulkan_malisx2.so"):
+                sys.exit("Unexpected MaliSX2 package metadata")
+            with archive.open("libvulkan_malisx2.so") as source, temporary.open("wb") as target:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    target.write(chunk)
+            if sha256_file(temporary) != MALISX2_LIBRARY_SHA256:
+                sys.exit("MaliSX2 driver checksum mismatch")
+    except (OSError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as error:
+        temporary.unlink(missing_ok=True)
+        sys.exit("Invalid MaliSX2 package: " + str(error))
+    temporary.replace(output / "libvulkan_malisx2.so")
+    (output / "driver.sha256").write_text(MALISX2_LIBRARY_SHA256 + "\n", encoding="ascii")
+    (output / "NOTICE.txt").write_text(
+        "MaliSX2 0.4.0 (63e307e63a), bundled from bmdhacks/malisx2.\n"
+        "Release: https://github.com/bmdhacks/malisx2/releases/tag/v0.4.0\n"
+        "Mesa-derived components use their respective licenses; source is pinned at\n"
+        "https://github.com/bmdhacks/armsx2-turnip/tree/f59c211100b174191d9df540451e94b2d5cb2b26\n"
+        "Experimental alternate Vulkan driver. D2R/Android window presentation and Xiaomi 11T gameplay are unverified.\n"
+        "Upstream reports MSAA is not implemented; some applications may fail.\n",
+        encoding="utf-8")
+    shutil.copyfile(ROOT / "prebuilt/MaliSX2-LICENSE.txt", licenses / "MaliSX2-LICENSE.txt")
+    shutil.copyfile(output / "NOTICE.txt", licenses / "MaliSX2-NOTICE.txt")
+    print("MaliSX2 0.4.0 ICD: archive and library checksums verified", flush=True)
+
 
 def sha256_file(path):
     digest = hashlib.sha256()
@@ -118,6 +160,28 @@ def build_counter_timestamp(build):
         header.write_text(text)
 
 
+def build_bc_decode(build):
+    # Generate the Mali BCn upload helper from production GLSL, independently of the game shader cache.
+    output = build / "bc_decode.spv"
+    run([TOOLS / "ndk/shader-tools/linux-x86_64/glslc", "--target-env=vulkan1.1", "-O",
+         ROOT / "native/shaders/bc_decode.comp", "-o", output])
+    data = output.read_bytes()
+    if len(data) < 20 or len(data) % 4:
+        sys.exit("Invalid BC decode SPIR-V size")
+    words = struct.unpack("<" + "I" * (len(data) // 4), data)
+    if words[0] != 0x07230203:
+        sys.exit("Invalid BC decode SPIR-V magic")
+    text = "// 从生产GLSL自动生成。| Generated from production GLSL.\n#pragma once\n#include <stdint.h>\n"
+    text += "static const uint32_t dm_vk_bc_decode_spv[] = {\n"
+    text += "".join("    " + ",".join(f"0x{word:08x}u" for word in words[i:i+8]) + ",\n" for i in range(0,len(words),8))
+    text += "};\n#define DM_VK_BC_DECODE_SPV_BYTES (sizeof dm_vk_bc_decode_spv)\n"
+    header = ROOT / "native/bc_decode_spv.h"
+    if not header.exists() or header.read_text() != text:
+        header.write_text(text)
+
+
+
+
 # APK 的版本必须能区分构建。写死的版本名会让系统把两个不同构建当成同一个版本（覆盖安装只提示"重新安装"），
 # 玩家也无从看出自己装的是哪一版。版本由构建时给入，CI 用 tag 名（发布）或 main-<短提交>（分支构建）。
 # The APK version has to tell builds apart. A hardcoded version name makes the system treat two different builds as
@@ -163,6 +227,10 @@ def main():
                         help="pinned JimVulkan r9 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-panvk", action="store_true",
                         help="明确构建不含 PanVK 的 APK")
+    parser.add_argument("--malisx2", type=Path, default=ROOT / "prebuilt/malisx2-0.4.0-63e307e63a.zip",
+                        help="pinned MaliSX2 0.4.0 package; archive and library SHA-256 are verified")
+    parser.add_argument("--no-malisx2", action="store_true",
+                        help="明确构建不含 MaliSX2 的 APK")
     args = parser.parse_args()
     if args.game_source and not args.game_run: parser.error("--game-source only makes sense with --game-run")
     if args.game_run and not args.game_source:
@@ -174,7 +242,9 @@ def main():
         print("Package-only build: game modules come from the imported package", flush=True)
     build = ROOT / "build"
     build.mkdir(exist_ok=True)
-    if args.game_run: build_counter_timestamp(build)
+    if args.game_run:
+        build_counter_timestamp(build)
+        build_bc_decode(build)
     for required in [BIN / "aarch64-linux-android29-clang", TOOLS / "jdk/bin/java", TOOLS / "platform/android.jar"]:
         if not required.exists(): sys.exit("Missing tool: " + str(required) + "; run tools/bootstrap.py")
     env = dict(os.environ, JAVA_HOME=str(TOOLS / "jdk"), PATH=str(TOOLS / "jdk/bin") + os.pathsep + os.environ["PATH"])
@@ -258,6 +328,14 @@ def main():
         print("PanVK driver: excluded (--no-panvk)", flush=True)
     else:
         package_panvk(args.panvk, assets, licenses)
+
+    if args.no_malisx2:
+        shutil.rmtree(assets / "malisx2", ignore_errors=True)
+        for stale_notice in ("MaliSX2-LICENSE.txt", "MaliSX2-NOTICE.txt"):
+            (licenses / stale_notice).unlink(missing_ok=True)
+        print("MaliSX2 driver: excluded (--no-malisx2)", flush=True)
+    else:
+        package_malisx2(args.malisx2, assets, licenses)
 
     # 诊断GLSL缓存独立于游戏的离线Maxwell fullshader缓存，不覆盖游戏资源。
     # Keep diagnostic GLSL shaders separate from the game's offline Maxwell fullshader cache.

@@ -35,9 +35,9 @@ To embed the game code in the APK instead of importing it, first generate the mo
 
 Captured on the device (OPPO OPD2409 / Adreno 830). The block in the top-left corner of the game frames is the debug overlay, live: frame rate, frame time, CPU / GPU time, power draw and draw counts.
 
-**Launcher** — package import, display profile, output resolution, save import / export. It is an ordinary app screen, so it has no frame overlay:
+**Launcher** — fullscreen landscape UI over the existing artwork, with a compact gold-accented settings panel sized for wide phone displays. The image below shows the previous layout:
 
-![Launcher](docs/images/launcher.jpg)
+![Launcher (previous layout)](docs/images/launcher.jpg)
 
 **Hero selection** — the character came back after importing a save from a backup:
 
@@ -50,7 +50,7 @@ Captured on the device (OPPO OPD2409 / Adreno 830). The block in the top-left co
 ## Progress (2026-10-17)
 
 - The game's ARM64 code runs on an Android host with NVN → Vulkan; AAudio sound, system-keyboard name entry, virtual stick and buttons, **gamepad support (D-pad and ZL/ZR included)** and an FPS/CPU/GPU overlay (off by default, switchable from the in-game menu).
-- **Launcher**: data-package import, display profile, output resolution (follow profile / 1080p / 1440p), save import/export.
+- **Launcher**: fullscreen landscape UI with a responsive side panel; data-package import, display profile, output resolution and save import/export.
 - **In-game menu** (on the system back key, modelled on Eden): frame rate display, on-screen controls, quality (four internal 3D resolution steps, effective immediately), export save, import save, exit. An accidental edge swipe no longer quits the run.
 - **Lifecycle**: going to the background asks the game to save before suspending, and the process is kept (window and swapchain rebuilt on return); tapping the icon after backgrounding goes straight back into the game.
 - **Performance**: camp on OPD2409 / Adreno 830 averages about 60 FPS (142 of 151 consecutive 120-frame windows had no frame over 33 ms). Cross-launch pipeline warm-up is verified on device (127 records rebuilt in 447.7 ms; menu pipeline creation fell from 826 ms to 1.1 ms). The remaining gap is first use of shader combinations on ground the player has not visited, plus occasional long frames.
@@ -69,12 +69,12 @@ Captured on the device (OPPO OPD2409 / Adreno 830). The block in the top-left co
 
 - **Upstream**: [jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) at `2eb5758771f110cd53082b999d88d242766610da`; its [MIT license](LICENSE) and third-party notices are retained.
 - **Optimization references**: Eden (a Switch emulator; its rendering and upscaling ideas are referenced, but its shader translation is GPL-3.0 and is **not** merged into this MIT project) and LASRecomp.
-- **Bundled graphics driver**: [Turnip](https://gitlab.freedesktop.org/mesa/mesa) (Mesa's open-source Vulkan driver, MIT) — the T30 Adreno build by **@Mr_Purple_666** (`vulkan.purple.so`, `26.3.0-T30-1.4.359`), shipped unmodified at `dm/android/prebuilt/turnip/` together with its `meta.json`. The launcher can also run on the phone's own driver.
+- **Bundled graphics drivers**: Turnip for Qualcomm KGSL, JimVulkan PanVK r9, and [MaliSX2 0.4.0](https://github.com/bmdhacks/malisx2/releases/tag/v0.4.0) for Mali kbase, plus the phone's System Vulkan. MaliSX2 is MIT-licensed and pinned by archive/library SHA-256. It is an experimental alternate: upstream reports G77 testing on another device, not this Xiaomi 11T or D2R, and MSAA is not implemented.
 - **Build dependencies**: Android NDK r28c, JDK 17, Android SDK build-tools / platform 35 (pinned by `bootstrap.py`).
 - **Packing game data additionally needs** (on the player's PC only): a Python venv (`lz4`, `capstone`, ...), `hactool`, and the .NET 10 SDK; the skill's prerequisites table lists them.
 
 **This repository does not contain** game executables, RomFS, keys, saves, translated game shaders or APKs. The game modules and the data package are produced locally from **your own** files and are never distributed here or in a release.
 
-It **does** ship one third-party binary: a **Turnip** Vulkan driver (`dm/android/prebuilt/turnip/vulkan.purple.so`, Mesa, MIT — T30 build by **@Mr_Purple_666**), which the build packs into the APK. The launcher can switch between it and the phone's own driver; on the test device the system Adreno driver renders **blocky lighting around the player** where Turnip renders it correctly, at the same ~60 FPS. Turnip needs Android 11+ (`minApi 30`), and the game's shaders are built for a subgroup size of 64, so the launcher writes the package's own `host-subgroup-size.txt` value into the driver configuration. Building with `--no-turnip` produces a driver-free APK instead. See [the driver notes](docs/ANDROID_GPU_DRIVER.zh-CN.md).
+The APK includes selectable System Vulkan, Turnip, PanVK and MaliSX2 drivers where the device supports them. MaliSX2 is pinned to upstream v0.4.0 with archive and library SHA-256 verification; its MIT license and notice are included. It is experimental, has no D2R/Xiaomi 11T gameplay validation, and upstream says MSAA is not implemented. `--no-malisx2` excludes it. See [the driver notes](docs/ANDROID_GPU_DRIVER.zh-CN.md).
 
 CI (GitHub Actions) builds the APK and the kit described above; see [the build notes](docs/ANDROID_BUILD.md).

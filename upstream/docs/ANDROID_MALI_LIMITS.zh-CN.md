@@ -11,7 +11,7 @@
 |---|---|---|
 | `subgroupSize` | **16**，`EXT_subgroup_size_control` 的 `min=max=16` | 数据包的 64 档 `host-subgroup-size.txt` 必须改成 16，否则 `shader_profile_check()` 直接 die |
 | BC 压缩纹理 | **所有 BC 格式 `optimalTilingFeatures = 0`** | 游戏贴图几乎全是 BC，驱动收到后在自己代码里 SIGSEGV |
-| GPU timestamp | `supported=0` | 计数器回退 CPU 时钟 |
+| GPU timestamp counter conversion | 旧日志 `counter_gpu_supported=0`（软件 eligibility gate） | 旧位宽检查会拒绝部分 64-bit 时间戳，不等于驱动不支持 Vulkan query；2026-11-01 已放宽为三段 32-bit 精确乘法与 uint64 模回绕输出，G925 真机待复验 |
 | `maxComputeWorkGroupInvocations` | 1024（8×8×8=512 在限制内） | 所以 compute 崩溃不是超限 |
 | ASTC / ETC2 | 支持（`optimalTilingFeatures = 0x1d401`） | 理论替代路径 |
 
@@ -104,11 +104,11 @@ Surface::hook_perform → Surface::perform → Surface::setFrameRate
 
 | 键 | 缺省 | 作用 |
 |---|---|---|
-| `trace_dispatch` | 1 | compute 派发的分段落点（定位“卡在哪一步”） |
+| `trace_dispatch` | 0 | compute 派发分段日志（默认关闭以减少逐派发 CPU/日志开销；`DM_VK_TRACE_DISPATCH=1` 或此配置项设为 1 可开启，环境变量 `0` 可覆盖配置） |
 | `write_trace` | 1 | 宿主写回客体的轨迹，崩溃时打印 |
 | `local_z_fold` | 1 | 是否把 `LocalSize Z>4` 折到 4。**Mali 上必须开**（关掉必现 `addr=0x18` 崩溃） |
 | `skip_folded_compute` | 0 | 跳过 3D storage image 的 compute（**诊断用，结果不正确**；已收在 Mali 判断下） |
-| `mali_skip_3d_compute` | 1 | 同上，另一条策略开关；**已收在 Mali 判断下**，Adreno 不触发 |
+| `mali_skip_3d_compute` | 0 | 跳过 3D storage image compute（仅故障定位、结果不正确；默认不开启，Mali 判断后才生效） |
 | `quiesce_before_pipeline` | 0 | 建 compute 管线前 `vkQueueWaitIdle`。**注意**：曾在持 `queue_lock` 时重复加锁导致全进程自锁，已修 |
 | `pso_warm` | 1 | 后台 PSO 预热线程；关掉可排除并发建管线 |
 | `static_uniforms` | 0 | 强制所有 uniform 静态，验证 dynamic uniform 是否是崩溃源 |

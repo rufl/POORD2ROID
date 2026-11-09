@@ -463,8 +463,11 @@ int dm_fe_bliss(void) { return atomic_load(&g_fe_bliss); }
 // Delete-character popup: the original game requires 'long-press 「是」(Yes)', and the long-press is measured by how long controller A is held (holding the mouse for 4 seconds only produces one Confirm on release and does not delete). Hold A while the finger is pressed on 「是」(Yes), and release it when the finger lifts
 static _Atomic int g_fe_del_open, g_del_q, g_del_hold;   // 模式页 / 确认框开着；模式页上点了牌子以外 → 返回 | Mode page / confirmation box open; on the mode page a tap landed outside the plaques -> back
 int dm_restart_busy(void);   // 一键重开进行中（定义在下面）：界面触点一律丢掉 | One-key restart in progress (defined below): all UI touch points are dropped
-void dm_ui_touch(int phase, float nx, float ny) { if (phase != 3 && dm_restart_busy()) return;   // phase：0 按下 1 移动 2 抬起 3 作废（按下后改成了滚动：这次不点）；nx / ny = 出图画面归一化坐标 [0,1] | phase: 0 down, 1 move, 2 up, 3 cancelled (turned into a scroll after the press: no click this time); nx / ny = coordinates normalized to the rendered picture [0,1]
+void dm_ui_touch(int phase, float nx, float ny) { if (phase != 3 && dm_restart_busy()) return;   // phase: 0 down, 1 move, 2 up, 3 cancel; normalized against the rendered picture
     if (phase == 3) { atomic_store(&g_ut_phase, 0); atomic_store(&g_del_q, 0); atomic_store(&g_del_hold, 0); return; }
+    if (dm_uiscreen_ingame()) { nx = dm_ui_nx(nx); ny = dm_ui_ny(ny); }
+    if ((nx < 0 || nx > 1 || ny < 0 || ny > 1) && phase == 0) return;
+    if (phase == 2 && !atomic_load(&g_ut_phase)) return;
     if (phase != 1) DM_LAT("ui_touch %d", phase);
     nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny;
     atomic_store(&g_ut_xy, ((uint64_t)(uint32_t)(nx * 65535 + .5f) << 16) | (uint32_t)(ny * 65535 + .5f));
@@ -510,6 +513,7 @@ void dm_ui_wheel_on(uint64_t w, int notches) {
 static _Atomic int g_tab_unhover;   // 点页签切页：下一次指针泵把光标挪到这次点的页签上（g_iq_xy）并收掉悬停保持，见 dm_ui_tab_go | Tapping a tab to switch pages: the next pointer pump moves the cursor onto the tab just tapped (g_iq_xy) and drops the held hover, see dm_ui_tab_go
 static _Atomic int g_up_hold; static _Atomic uint64_t g_up_xy; static struct { int kind, arg; } g_up_q[32]; static _Atomic unsigned g_up_w, g_up_r;
 void dm_ui_ptr(int kind, float nx, float ny, int arg) { if (dm_restart_busy()) return;
+    if (dm_uiscreen_ingame()) { nx = dm_ui_nx(nx); ny = dm_ui_ny(ny); }
     nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny;
     if (kind <= DM_UP_MOVE) { atomic_store(&g_up_xy, ((uint64_t)(uint32_t)(nx * 65535 + .5f) << 16) | (uint32_t)(ny * 65535 + .5f)); if (kind == DM_UP_HOVER) atomic_store(&g_up_hold, 1); return; }
     unsigned w = atomic_load(&g_up_w); if (w - atomic_load(&g_up_r) >= 32) return;
@@ -538,7 +542,8 @@ static int hit_log_ok(const char *hit) {
 static _Atomic int g_iq_out;   // 这次查询的触点在界面矩形之外（见 ui_classify） | The touch point of this query is outside the UI rectangle (see ui_classify)
 #define UI_OUT(nx, ny) ((nx) < 0 || (nx) > 1 || (ny) < 0 || (ny) > 1)
 unsigned dm_ui_item_query(float nx, float ny) {
-    if (!atomic_load(&g_iq_drop)) { atomic_store(&g_drop_last, -1); atomic_store(&g_sn_new, 1); }   // 普通命中查询（按下）= 新手势：上一次拖放的落点、吸附 / 停靠都作废 | Ordinary hit query (press) = new gesture: the previous drag-and-drop landing point and the snap / parking are all invalidated
+    if (dm_uiscreen_ingame()) { nx = dm_ui_nx(nx); ny = dm_ui_ny(ny); }
+    if (!atomic_load(&g_iq_drop)) { atomic_store(&g_drop_last, -1); atomic_store(&g_sn_new, 1); }
     DM_LAT("query");
     atomic_store(&g_iq_out, UI_OUT(nx, ny));
     nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny;
@@ -1121,9 +1126,10 @@ static int imbue_locked(module_t *m, uint64_t root) {
     dm_hud_info hi; dm_hud_get(&hi); if (!hi.valid || !hi.holding) return 0;
     return !(g_slot_w && *(uint64_t *)g_slot_w == (uint64_t)m->base + 0x20898e8);
 }
-int dm_ui_item_at_now(float nx, float ny) {   // 只许游戏主线程调（Mac 宿主触点脚本在取手柄处跑） | Callable only from the game main thread (the Mac host touch point script runs where the controller is polled)
+int dm_ui_item_at_now(float nx, float ny) {
     module_t *m = main_module(); if (!m) return 0; uint64_t root = 0; memcpy(&root, m->base + 0x2f05458, 8);
     int32_t w = *(int32_t *)(m->base + 0x211da38), h = *(int32_t *)(m->base + 0x211da3c); if (!root || w <= 0 || h <= 0) return 0;
+    if (dm_uiscreen_ingame()) { nx = dm_ui_nx(nx); ny = dm_ui_ny(ny); }
     { int dm_vault_ui_tip_gate(int, int); if ((dm_ui_panel_state() & DM_PS_VAULT) && dm_vault_ui_tip_gate((int)(nx * w), (int)(ny * h))) return 6; }
     { int dm_pouch_tip_gate(int, int); if (dm_pouch_tip_gate((int)(nx * w), (int)(ny * h))) return 6; }   // 百宝囊清单开着：点框外只收清单（dm_pouch.c）   // 同 ui_item_pump：编年史说明框外只收框 | Pouch list open: a tap outside the box only dismisses the list (dm_pouch.c)   // same as ui_item_pump: outside the chronicle tooltip only dismisses the box
     char hit[40]; g_cls_out = UI_OUT(nx, ny); int r = ui_classify(m, root, (int)(nx * w), (int)(ny * h), hit, sizeof hit);
@@ -1264,6 +1270,7 @@ int dm_ui_drop_point(float *nx, float *ny) {   // 最近一次落点判定为 5 
 }
 static _Atomic uint32_t g_iq_y2;
 unsigned dm_ui_drop_query(float nx, float ny_lifted, float ny_finger) {
+    if (dm_uiscreen_ingame()) ny_finger = dm_ui_ny(ny_finger);
     ny_finger = ny_finger < 0 ? 0 : ny_finger > 1 ? 1 : ny_finger; atomic_store(&g_iq_y2, (uint32_t)(ny_finger * 65535 + .5f)); atomic_store(&g_iq_drop, 1);
     return dm_ui_item_query(nx, ny_lifted);
 }
@@ -1519,10 +1526,11 @@ static void ui_ptr_pump(module_t *m, uint64_t root, int width, int height) {
 static _Atomic int g_dg_kind; static _Atomic uint64_t g_dg_o, g_dg_c; static _Atomic unsigned g_dg_seq; static _Atomic uint32_t g_dg_tol;
 static uint64_t dg_pack(float nx, float ny) { nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny; return ((uint64_t)(uint32_t)(nx * 65535 + .5f) << 16) | (uint32_t)(ny * 65535 + .5f); }
 void dm_ui_drag_begin(int kind, float ox, float oy, float tol_ny) {
+    if (dm_uiscreen_ingame()) { ox = dm_ui_nx(ox); oy = dm_ui_ny(oy); }
     uint64_t o = dg_pack(ox, oy); atomic_store(&g_dg_o, o); atomic_store(&g_dg_c, o); atomic_store(&g_dg_tol, (uint32_t)((tol_ny < 0 ? 0 : tol_ny > 0.5f ? 0.5f : tol_ny) * 65535));
     atomic_store(&g_dg_kind, kind == 2 ? 2 : 1); atomic_fetch_add(&g_dg_seq, 1);
 }
-void dm_ui_drag_move(float x, float y) { if (atomic_load(&g_dg_kind)) atomic_store(&g_dg_c, dg_pack(x, y)); }
+void dm_ui_drag_move(float x, float y) { if (atomic_load(&g_dg_kind)) { if (dm_uiscreen_ingame()) { x = dm_ui_nx(x); y = dm_ui_ny(y); } atomic_store(&g_dg_c, dg_pack(x, y)); } }
 void dm_ui_drag_end(void) { atomic_store(&g_dg_kind, 0); }
 static _Atomic uint32_t g_dg_lift;   // 前端报的物品图抬起量（屏高的比例 × 65535）：iOS 40 点 × 控件缩放、Mac 触点脚本 40 / 1320，同各自拖放落点 | The item image lift reported by the front end (fraction of screen height × 65535): iOS 40 pt × widget scale, Mac touch point script 40 / 1320, same as each one's drag-drop drop point
 void dm_ui_drag_lift(float ny) { atomic_store(&g_dg_lift, (uint32_t)((ny < 0 ? 0 : ny > 0.5f ? 0.5f : ny) * 65535)); }

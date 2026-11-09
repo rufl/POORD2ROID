@@ -395,6 +395,9 @@ typedef struct descriptor_scratch {
     VkDescriptorImageInfo *images;
     VkBufferView *texels;
     size_t buffer_capacity,image_capacity,texel_capacity;
+    // bind_shader runs under queue_lock; its descriptor writes are consumed before the next call.
+    VkWriteDescriptorSet writes[256];
+    uint32_t dynamic_offsets[256];
 } descriptor_scratch;
 static descriptor_scratch descriptor_workspace;
 static void descriptor_reserve(shader_entry *s) {
@@ -417,9 +420,9 @@ static VkDescriptorSet bind_shader(shader_entry *s,post_op *lifetime,uint32_t *d
     // Both sets' dynamic offsets must be contiguous in one array: every offset of the first set, then the second's.
     if(dynamic_base+s->dynamic_count>256)die("Vulkan dynamic uniform offset capacity: shader=%s base=%u count=%u",s->key,dynamic_base,s->dynamic_count);
     *dynamic_count=dynamic_base+s->dynamic_count;
-    VkWriteDescriptorSet writes[256];
+    VkWriteDescriptorSet *writes=descriptor_workspace.writes;
     uint64_t res_phase=dm_cpu_phase_begin();
-    int trace_bind=getenv("DM_VK_TRACE_DISPATCH")!=NULL||perf_config_int("trace_dispatch",1);
+    int trace_bind=trace_dispatch_enabled();
     for(unsigned i=0;i<s->count;i++){
         const shader_binding *b=&s->bindings[i];const shader_binding_plan *plan=&s->binding_plan[i];VkDescriptorType type=plan->type;VkDescriptorBufferInfo *buffers=NULL;VkDescriptorImageInfo *images=NULL;VkBufferView *texel_views=NULL;
         if(trace_bind&&!strcmp(s->key,"60f3906f2280721c"))LOG("[vulkan-bind] %s i=%u/%u binding=%u type=%d count=%u kind=%u flags=%u",
@@ -475,7 +478,7 @@ static VkDescriptorSet bind_shader(shader_entry *s,post_op *lifetime,uint32_t *d
     // Perform uploads/access hazard handling on every call before comparing actual payloads; hits never skip GPU synchronization.
     graphics_probe_cs_inputs(s,writes,s->count,dynamic_offsets+dynamic_base,s->dynamic_count);
     uint64_t descset_phase=dm_cpu_phase_begin();
-    VkDescriptorSet set=descriptor_cache_find(s->layout,writes,s->count);
+    VkDescriptorSet set=descriptor_cache_find(s,writes);
     if(set){dm_cpu_phase_end(DM_CPU_PHASE_DESCSET,descset_phase);return set;}
     set=descriptor_allocate(s->layout);for(unsigned i=0;i<s->count;i++)writes[i].dstSet=set;
     if(s->count)vkUpdateDescriptorSets(device,s->count,writes,0,NULL);descriptor_cache_store(s->layout,set);
@@ -511,10 +514,10 @@ static int shader_host_writes(const shader_entry *s) {
 static void dispatch_compute(const p_dispatch *d) {
     snapshot_prepare();graphics_pass_end();
     if(!state.program||!state.program->nstage)die("Vulkan dispatch without program");shader_entry *s=program_shader(state.program,0);if(s->stage!=5)die("Vulkan dispatch with graphics shader");
-    { int trace=getenv("DM_VK_TRACE_DISPATCH")!=NULL||perf_config_int("trace_dispatch",1);
+    { int trace=trace_dispatch_enabled();
       if(trace)LOG("[vulkan-dispatch] %s enter dependencies check_layout=%d module=%p",s->key,s->layout!=VK_NULL_HANDLE,(void*)s->module); }
     dependencies_prepare_shader(s);
-    { int trace=getenv("DM_VK_TRACE_DISPATCH")!=NULL||perf_config_int("trace_dispatch",1);
+    { int trace=trace_dispatch_enabled();
       if(trace)LOG("[vulkan-dispatch] %s dependencies done pipeline=%p",s->key,(void*)s->compute_pipeline); }
     // 诊断开关 skip_folded_compute：把"需要折叠 LocalSize Z"的 compute 直接跳过（不建管线、不派发）。
     // Mali 在这些着色器上会让驱动内部 SIGSEGV，跳过可以把它们从因果链里摘掉，确认其余部分能否跑通。
@@ -576,7 +579,7 @@ static void dispatch_compute(const p_dispatch *d) {
         // 布局里。没有这份记录就只能继续猜。
         // Log every field handed to the driver: a standalone minimal program builds a pipeline from the same
         // SPIR-V, so the difference must be in the parameters or the layout. Without this record it is guesswork.
-        if(perf_config_int("trace_dispatch",1)){
+        if(trace_dispatch_enabled()){
             LOG("[vulkan-pipeline-dump] %s module=%p pName=%s layout=%p cache=%p stage_flags=%#x pNext=%p",
                 s->key,(void*)s->module,ci.stage.pName,(void*)s->compute_layout,(void*)pipeline_cache,
                 (unsigned)ci.stage.flags,(void*)ci.stage.pNext);
@@ -604,14 +607,14 @@ static void dispatch_compute(const p_dispatch *d) {
     // 分段落点：崩溃在驱动内时，只有"走到哪一步"能说明是哪次调用炸的（Mali 会死在驱动自己的代码里）。
     // Step markers: when the crash is inside the driver, only "how far we got" says which call blew up
     // (Mali dies inside its own code).
-    int trace_dispatch=getenv("DM_VK_TRACE_DISPATCH")!=NULL||perf_config_int("trace_dispatch",1);
+    int trace_dispatch=trace_dispatch_enabled();
     if(trace_dispatch)LOG("[vulkan-dispatch] %s begin bind_shader bindings=%u",s->key,s->count);
     VkDescriptorSet set=bind_shader(s,NULL,dynamic_offsets,&dynamic_count);
     // LocalSize Z 被折成 1 时，dispatch 的 Z 要按同样倍数放大，线程总数才不变。
     // When LocalSize Z was folded to 1, the dispatch Z must grow by the same factor to keep the thread count.
     uint32_t groups_z=d->z;
     if(s->local_z_fold>1){groups_z=d->z*s->local_z_fold;
-        { int trace=getenv("DM_VK_TRACE_DISPATCH")!=NULL||perf_config_int("trace_dispatch",1);
+        { int trace=trace_dispatch_enabled();
           if(trace)LOG("[vulkan-dispatch] %s LocalSize Z folded %ux: dispatch z %u -> %u",s->key,s->local_z_fold,d->z,groups_z); } }
     if(trace_dispatch)LOG("[vulkan-dispatch] %s bound set=%p dynamic=%u pipeline=%p layout=%p dispatch=%u,%u,%u",
         s->key,(void*)set,dynamic_count,(void*)s->compute_pipeline,(void*)s->compute_layout,d->x,d->y,d->z);

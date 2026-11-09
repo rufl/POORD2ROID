@@ -37,7 +37,7 @@ On Xiaomi 11T (Dimensity 1200, Mali-G77 MC9), the expected choices are System Vu
 
 ### Display, frame pacing, and performance
 
-Fresh settings request a 20:9 game view at 1280×576 and a 30 Hz/FPS presentation cap, according to the launcher's initial preferences. These are configuration requests, not a guarantee of sustained 30 FPS; demanding scenes, shader compilation, temperature, and driver limits can lower performance. Menus and loading screens may remain centered at 16:9. Android cutouts and system insets can change the usable area; verify HUD, map, dialogs, and controls on-device.
+Fresh settings request a 20:9 world view at 1280×576 and cap presentation at 30 Hz/FPS; this does not guarantee sustained 30 FPS. On Android, the world keeps the wide view while the HUD uses a centered logical 16:9 canvas, with UI touches mapped to the same safe area. Menus and loading screens remain centered at 16:9. Geometry tests and the Android build cover the change; final visual validation of the HUD, map, dialogs, and controls still requires the device.
 
 Optional GPU BC texture decoding is disabled by default. It can move work from the CPU to the GPU, but may not help GPU-bound scenes. Compare sustained frame times before enabling it. Pipeline caching and warm-up reduce some repeated compilation; they do not eliminate all in-game shader compilation.
 

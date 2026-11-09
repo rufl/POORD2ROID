@@ -56,6 +56,9 @@ python dm/android/tools/build.py --game-run   --game-source ~/dm-work/build/andr
 
 输出 `dm/android/build/D2R-Android-port.apk`，包名 `org.d2r.android.port`。真实游戏APK包含本机派生的游戏模块，不随源码发布。
 
+启动分辨率默认值为 1280×576（20:9）；旧配置中缺失或为空的分辨率也会迁移到此值，避免游戏回退到 800×600。游戏在局内将 HUD 和面板排布在 16:9 逻辑画布上，世界按配置的宽屏比例渲染。Vulkan 按游戏已验证的 UI 绘制特征（4 个顶点、2 个属性、20 字节顶点步长）识别 UI 绘制，将其整屏 viewport 替换为逻辑画布边界，并把 scissor 裁剪到同一居中安全区；3D 世界绘制保留原 viewport。20:9 时世界相机水平投影系数为 16/20，显示更多横向场景且不改变垂直比例。菜单和读取画面按 16:9 等比例适配。11T 的 1020×459 目标中，816×459 UI 画布映射到源像素 `(102,0)`–`(918,459)`；2400×1080 表面上的对应区域为 `(240,0)`–`(2160,1080)`。几何测试覆盖整屏 HUD 的 viewport/scissor 映射和裁剪；仍需真机验证实际渲染。
+
+
 ```bash
 export ANDROID_SERIAL='你的设备序列号'
 adb -s "$ANDROID_SERIAL" install -r dm/android/build/D2R-Android-port.apk
@@ -66,9 +69,10 @@ adb -s "$ANDROID_SERIAL" shell am start -n org.d2r.android.port/.LauncherActivit
 ```
 
 RomFS和着色器仅首次或资源版本变化时部署；更新APK保留应用数据。首次无存档会进入建角界面。存档位于应用私有 `files/save/`，不要用其他设备存档覆盖现有角色。驱动与启动配置见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)和[启动设置](ANDROID_LAUNCH_SETTINGS.zh-CN.md)。
+`make_package.py` 现在保留游戏原始的 Console/Handheld 字体档，不再默认把游戏字体放大 1.5 倍。重新导入新数据包会移除旧包中的 1.5× 字体 overlay；只更新 APK 不会改动已导入资源。
 若要覆盖更新已有安装，必须沿用相同签名密钥；默认使用 `$DM_ANDROID_TOOLS/debug.keystore`。密钥不同时 Android 会拒绝更新，可用 `--keystore PATH` 指定已有密钥。
 
-启动器保留三种后端：系统 Vulkan、适用于 Android 12+ Mali kbase（`/dev/mali0`）的 JimVulkan PanVK r9，以及适用于 Qualcomm KGSL（`/dev/kgsl-3d0`）的内置 Turnip。Xiaomi 11T 显示系统 Vulkan 与实验性 PanVK，不显示 Turnip。APK 0.6.71 的 app-UID 冒烟测试已在 Mali-G77 MC9 上加载 PanVK r9（driver ID 20、subgroup 16）、创建设备并解析 Android surface/swapchain 分发；尚未创建真实 `ANativeWindow` surface、呈现画面、进入 D2R 或测量 FPS。PanVK 仍属实验性、非一致性驱动。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
+启动器提供 System Vulkan、JimVulkan PanVK r9、MaliSX2 0.4.0（Mali kbase，`/dev/mali0`）以及 Qualcomm KGSL（`/dev/kgsl-3d0`）专用的内置 Turnip。设备只显示硬件及 APK 资源都匹配的选项；Xiaomi 11T 预期显示 System、MaliSX2 和 PanVK。MaliSX2 固定版本并校验压缩包与驱动库 SHA-256，APK 内含 MIT 许可证和声明。上游将 Mali-G77 列为支持型号，但测试设备并非 11T；D2R 游戏、Android 呈现和 11T 性能尚未验证。上游说明该版本尚未实现 MSAA。所有自定义驱动均严格启动，失败不会静默回退；需要恢复时请明确选择 System。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
 
 Android 模拟外部存储上的 xattr 查询可能返回 `EOPNOTSUPP`。此时 RomFS 路径解析会直接使用物理文件名作为客体名（包括 `.build.config` 等点文件）；存档仍位于应用私有的 `files/save/`。
 Android APK 会在每次游戏读取设置前强制文字和语音为英文（`Language` / `VoiceLanguage` = `0`），覆盖旧的中文设置和 `lang_en` 选择，但保留其他设置与存档数据。此 Android 版本不提供游戏内语言切换。
@@ -101,7 +105,9 @@ git tag v0.2 && git push origin v0.2
 包的入口是 `org.d2r.android.port.LauncherActivity`（Java），游戏本体是它启动的第二个页面 `D2RActivity`（不导出）。清单由 `build.py` 从仓库清单改写而来：替换必须正好命中一个 NativeActivity 块，否则直接报错退出；探针构建没有 dex，所以仍用纯原生清单、不出现 Java 页面。
 
 界面目前可用的设置是调试浮层开关与画面档位（掌机1280×720 / 主机1600×900），点“启动游戏”时写进应用私有 `files/temp/launch-settings.conf`，由 native 严格解析（键白名单、失败即中止启动，且不接受任意路径）。游戏文件与密钥两项**尚未接入**，只如实显示“未设置”。
-游戏内返回菜单提供 30 / 60 / 跟随屏幕最高刷新率三档；默认呈现上限为 60 Hz，已保存的 30 Hz 或“跟随”设置仍优先，高刷新率设备可手动选“跟随”。这是节拍请求，不代表游戏实测 FPS；场景负载与温度仍会限制性能。Vulkan 启动日志记录设备/驱动、扩展、subgroup 与关键格式能力；每 60 帧记录 BC CPU 解排布/解码耗时。Android 内存压力回调只释放已完成、空闲的上传缓冲区。
+游戏内返回菜单提供 30 / 60 / 跟随屏幕最高刷新率三档；默认呈现上限为 60 Hz，已保存的 30 Hz 或“跟随”设置仍优先，高刷新率设备可手动选“跟随”。这是节拍请求，不代表游戏实测 FPS；场景负载与温度仍会限制性能。Vulkan 启动日志记录设备/驱动、扩展、subgroup 与关键格式能力；BC 贴图上传统计每 60 帧分别记录 CPU 解码和 GPU 计算提交情况，GPU 侧的主机准备耗时不包含 GPU 执行时间。Android 内存压力回调只释放已完成、空闲的上传缓冲区。
+Bannerlator 的 Mali 路径用 BCn Vulkan layer 在 GPU 上转码压缩贴图。本项目是 NVN→Vulkan，不是 Wine/DXVK，因此采用进程内计算着色器解码 BC1–BC5，而非直接使用 Bannerlator 的 wrapper/layer。该优化仅用于 A/B：在应用私有 `files/temp/perf.conf` 写入 `bc_decode_gpu 1` 并重启；默认值 `0` 保持 CPU 路径。BC6H/BC7、1D/1D-array/3D 和过大贴图仍由 CPU 处理，管线初始化失败也回退 CPU。GPU 主机准备耗时不包括 GPU 执行；GPU 已受限的场景可能变慢，需在设备上对比持续帧时间后再决定是否启用。
+主机回归测试需要 Vulkan SDK/loader 和支持计算着色器的 GPU：用 `glslc --target-env=vulkan1.1 -O` 编译 `dm/android/native/shaders/bc_decode.comp`，再将 `dm/android/tests/bc_decode_vulkan_test.c` 与 `dm/gfx/tex/nvn_bcdec.c` 编译，并把生成的 SPIR-V 路径传给测试程序。测试在 432 种 BC1–BC5 格式/边缘尺寸组合下，将 GPU 输出与 CPU 解码结果逐像素比较；它不能证明 Mali 驱动稳定性或游戏 FPS。
 
 
 启动画面背景图随源码发布：`dm/android/artwork/launcher-background.*`，构建时打进 APK 的 `assets/`，所以新电脑 clone 后能重建出同样的 APK。想换自己的图，把同名文件放进 `dm/android/local/`（该目录已 gitignore）即可覆盖，不必改源码。素材明显小于屏幕时代码会先缩小再放大，让放大本身把它柔化成氛围底图；换更大的图就自动变清晰。

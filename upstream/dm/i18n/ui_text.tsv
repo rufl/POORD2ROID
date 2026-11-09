@@ -373,12 +373,12 @@ dmAndroidLaunchResolution	分辨率	Resolution	Android 启动界面
 dmAndroidLaunchDriver	驱动	Driver	Android 启动界面
 dmAndroidLaunchDriverSystem	系统驱动	System Vulkan	Android 启动界面
 dmAndroidLaunchDriverPanvk	PanVK（实验性 Mali 驱动）	PanVK (experimental Mali driver)	Android 启动界面驱动选择
+dmAndroidLaunchDriverMalisx2	MaliSX2（实验性 Mali 驱动）	MaliSX2 (experimental Mali driver)	Android 启动界面驱动选择
 dmAndroidLaunchDriverTurnip	内置 Turnip	Built-in Turnip	Android 启动界面
 dmAndroidLaunchDriverPreparing	正在准备所选驱动…	Preparing selected driver…	Android 启动界面
 dmAndroidLaunchDriverFailed	所选驱动不可用：%s	Selected driver unavailable: %s	Android 启动界面
 dmAndroidLaunchFollowProfile	跟随档位	Follow profile	Android 启动界面
 dmAndroidLaunchNeedsImport	还没有数据包，请先导入再启动游戏	No package yet; import one before starting the game	Android 启动界面
-dmAndroidLaunchPending	数据包由电脑端生成（见 docs/ANDROID_PACKAGE.zh-CN.md），导入后即可启动	The package is produced on a PC (see docs/ANDROID_PACKAGE.zh-CN.md); import it to start	Android 启动界面
 dmAndroidMenuTitle	游戏菜单	Game menu	Android 游戏内菜单
 dmAndroidMenuOverlay	帧率显示	Frame rate display	Android 游戏内菜单
 dmAndroidMenuControls	虚拟摇杆	On-screen controls	Android 游戏内菜单

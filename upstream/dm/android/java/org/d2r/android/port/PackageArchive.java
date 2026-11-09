@@ -29,7 +29,7 @@ final class PackageArchive {
     static final int FORMAT = 1;
     static final String MANIFEST = "manifest.json";
     static final String DERIVED = "derived.tsv";
-    static final String[] PREFIXES = {"game/", "romfs/", "shaders/"};
+    static final String[] PREFIXES = {"game/", "romfs/", "romfs_overlay/", "shaders/"};
 
     // 启动时游戏按名字打开这些文件，缺一个就在启动时崩（实测：FATAL open .../game/sdk.fixups.tsv）。
     // 这与 build_package.py 的 GAME_MODULES / GAME_LAYOUTS 是同一份契约，改动必须两边一起。
@@ -65,11 +65,13 @@ final class PackageArchive {
 
     static final class Counts {
         final int romfs;
+        final int romfsOverlay;
         final int shaders;
         final int game;
 
-        Counts(int romfs, int shaders, int game) {
+        Counts(int romfs, int romfsOverlay, int shaders, int game) {
             this.romfs = romfs;
+            this.romfsOverlay = romfsOverlay;
             this.shaders = shaders;
             this.game = game;
         }
@@ -89,12 +91,14 @@ final class PackageArchive {
         final int format;
         final int game;
         final int romfs;
+        final int romfsOverlay;
         final int shaders;
 
-        Declaration(int format, int game, int romfs, int shaders) {
+        Declaration(int format, int game, int romfs, int romfsOverlay, int shaders) {
             this.format = format;
             this.game = game;
             this.romfs = romfs;
+            this.romfsOverlay = romfsOverlay;
             this.shaders = shaders;
         }
     }
@@ -145,7 +149,7 @@ final class PackageArchive {
         return false;
     }
 
-    // "game" / "romfs" / "shaders" / "derived.tsv"，不属于任何一类则 null。
+    // "game" / "romfs" / "romfs_overlay" / "shaders" / "derived.tsv", otherwise null.
     static String category(String name) {
         if (name.equals(DERIVED)) return DERIVED;
         for (String prefix : PREFIXES) {
@@ -169,9 +173,10 @@ final class PackageArchive {
         File manifest = new File(assets, MANIFEST);
         deleteTree(staging);
         if (manifest.isFile() && !manifest.delete()) throw new IOException("cannot clear " + manifest);
+        deleteTree(new File(assets, "romfs_overlay"));
 
         byte[] manifestBytes = null;
-        int romfs = 0, shaders = 0, game = 0, entries = 0;
+        int romfs = 0, romfsOverlay = 0, shaders = 0, game = 0, entries = 0;
         long written = 0, lastReported = 0;
         byte[] buffer = new byte[1 << 20];
         try {
@@ -205,6 +210,7 @@ final class PackageArchive {
                     }
                     written += size;
                     if ("romfs".equals(category)) romfs++;
+                    else if ("romfs_overlay".equals(category)) romfsOverlay++;
                     else if ("shaders".equals(category)) shaders++;
                     else if ("game".equals(category)) game++;
                     if (totalBytes > 0 && written - lastReported > totalBytes / 100) {
@@ -222,6 +228,15 @@ final class PackageArchive {
             }
             List<String> missing = new ArrayList<>();
             if (romfs == 0) missing.add("romfs/");
+            if (romfsOverlay > 0) {
+                File overlayData = new File(assets, "romfs_overlay/data");
+                File config = new File(overlayData, ".build.config");
+                File[] archives = overlayData.listFiles((directory, name) -> name.endsWith(".data"));
+                if (!config.isFile() || !config.canRead()) missing.add("romfs_overlay/data/.build.config");
+                if (archives == null || archives.length != 1 || !archives[0].isFile() || archives[0].length() == 0) {
+                    missing.add("romfs_overlay/data/<one non-empty .data archive>");
+                }
+            }
             if (shaders == 0) missing.add("shaders/");
             if (game == 0) missing.add("game/");
             for (String name : requiredModules()) {
@@ -254,11 +269,12 @@ final class PackageArchive {
             // counts.derived is a row count (the three tables), not a file count, so it is not compared here.
             requireCount("game", declaration.game, game);
             requireCount("romfs", declaration.romfs, romfs);
+            requireCount("romfs_overlay", declaration.romfsOverlay, romfsOverlay);
             requireCount("shaders", declaration.shaders, shaders);
 
             swap(staging, modules);
             writeManifest(manifest, manifestBytes);
-            return new Counts(romfs, shaders, game);
+            return new Counts(romfs, romfsOverlay, shaders, game);
         } catch (IOException error) {
             deleteTree(staging);          // 失败不留半个暂存目录 | no half-staging tree survives a failure
             throw error;
