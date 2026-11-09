@@ -45,6 +45,40 @@ static inline void dm_ui_fit_rect(int source_w, int source_h, int surface_w, int
     *x = (surface_w - *width) / 2;
     *y = (surface_h - *height) / 2;
 }
+// During wide gameplay, the NVN texture may retain its startup allocation after
+// the game's active logical extent changes. Present only that active extent.
+static inline int dm_ui_present_source_rect(int source_w, int source_h,
+                                            const int crop[4], int wide_gameplay,
+                                            int active_w, int active_h,
+                                            int *x, int *y, int *width, int *height) {
+    if (source_w <= 0 || source_h <= 0) {
+        *x = *y = *width = *height = 0;
+        return -1;
+    }
+    // WindowSetCrop describes the active frame inside a potentially larger
+    // backing allocation. It is authoritative: logical UI globals can lag the
+    // resolution transition by one pump and must never override a valid crop.
+    if (crop && (crop[0] || crop[1] || crop[2] || crop[3]) &&
+        crop[0] >= 0 && crop[1] >= 0 && crop[2] > 0 && crop[3] > 0 &&
+        (int64_t)crop[0] + crop[2] <= source_w &&
+        (int64_t)crop[1] + crop[3] <= source_h) {
+        *x = crop[0]; *y = crop[1]; *width = crop[2]; *height = crop[3];
+        return 1;
+    }
+    if (wide_gameplay && active_w > 0 && active_h > 0 &&
+        active_w <= source_w && active_h <= source_h) {
+        *x = *y = 0; *width = active_w; *height = active_h;
+        return 3;
+    }
+    if (crop && (crop[0] || crop[1] || crop[2] || crop[3])) {
+        *x = *y = 0; *width = source_w; *height = source_h;
+        return 2;
+    }
+    *x = *y = 0; *width = source_w; *height = source_h;
+    return 0;
+}
+
+
 
 // Surface-normalized pixel location -> normalized location inside the displayed image.
 static inline float dm_ui_surface_to_source(float n, int surface_extent, int origin, int extent) {

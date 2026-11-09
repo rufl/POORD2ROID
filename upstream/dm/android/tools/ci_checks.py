@@ -145,6 +145,8 @@ def main():
                         workspace / "gpu_driver_fallback", ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror"))
         compile_and_run("NativeActivity 前台启动门", [ROOT / "tests/startup_gate_test.c"],
                         workspace / "startup_gate", ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror"))
+        compile_and_run("Android 界面滚动/滑块手势分类", [ROOT / "tests/ui_gesture_test.c"],
+                        workspace / "ui_gesture", ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror"))
 
         compile_and_run("方向键/扳机映射（t_padmap）", [REPO / "dm/host/tests/t_padmap.c"], workspace / "t_padmap")
         # 启动设置：普通版与"环境写入失败"注入版都要跑（故障恢复那条只有注入版才覆盖）。
@@ -162,7 +164,8 @@ def main():
         # accept anything with at least one file per category, so a hollow package could pass and leave the game
         # unable to start.
         for source, test, label in (("SaveArchive.java", "SaveArchiveTest", "存档包"),
-                                    ("PackageArchive.java", "PackageArchiveTest", "数据包导入")):
+                                    ("PackageArchive.java", "PackageArchiveTest", "数据包导入"),
+                                    ("LaunchSettings.java", "LaunchAspectTest", "启动界面 20:9/16:9 切换")):
             if not (JAVAC.exists() and JAVA.exists()):
                 skipped.append("%s（%s）：没有项目 JDK（%s）" % (label, test, JAVAC))
                 continue

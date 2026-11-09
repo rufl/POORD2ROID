@@ -25,8 +25,11 @@ def load(var='C'): return hud_v4_design.load(SRC, var)
 # 试调量（腰带三项按手机实拍校正：原版小药水贴图在格内偏右下，以手机常见的小药水居中为准；其余 Mac 截图逐像素量出）：腰带位移 / 格距、经验条位移、数值文字位移与字号
 # Tuning values (the three belt items are corrected from real phone captures: the original game's small potion texture sits toward the lower right within the slot, so the small potion commonly seen on the phone is taken as centered; the rest are measured pixel by pixel from Mac screenshots): belt offset / slot pitch, experience bar offset, value text offset and font size
 T=dict(bx=6.5,by=5,bpx=25,bs=1.6,ex=-7,ey=-15,txt=43,tx=-238,ts=1.4)   # bs：腰带缩放（药水对效果图 78 像素图标） | bs: belt scale (potions matched to the mockup's 78-pixel icons)
-if len(sys.argv)>3: T.update(json.loads(sys.argv[3]))   # 试调：覆盖上面的量 | Tuning: overrides the values above
 g=load('C'); W,H=g['W'],g['H']; U=H/2160; RX0,RY0=-1473,-417
+# Android has no UIKit drawV4 layer. Keep the game's own HP/MP values, XP bar,
+# and skill widgets visible instead of applying the iOS hide-and-redraw scheme.
+ANDROID = os.environ.get('DM_ANDROID_HUD') == '1'
+BOTTOM_SAFE_PX=48 if ANDROID else 0   # Android gesture-navigation clearance only.
 ux=lambda px:(px-W/2)/U-RX0; uy=lambda py:(py-H)/U-RY0
 BASE='PANEL/HUD_02/BugBTN'   # 借用路径，见登记表 | Borrowed path, see the registry
 # ---- 底图 ----
@@ -75,7 +78,7 @@ spr.save(f'{OUT}/base.png')
 # ---- Layout ----
 # Based on touchrectv1 (the current phone bottom bar layout: root fills the full screen, widgets anchored at the bottom-edge midpoint; the six native skill buttons are already placed in the right-side skill area with the iOS skill circles stacked on top, and must be kept as is), only the bottom bar widgets are rearranged
 j=layout_patch.apply(layout_patch.load_text(romfs_art.read(ROMFS,'global/ui/Layouts/Controller/HUDPanelHD.json').decode('utf-8-sig')),json.load(open(os.path.join(HERE,'touchrectv1_patch.json'),encoding='utf-8')))
-X=lambda px:(px-W/2)/U; Y=lambda py:(py-H)/U          # 锚底边中点的部件坐标 | Widget coordinates anchored at the midpoint of the bottom edge
+X=lambda px:(px-W/2)/U; Y=lambda py:(py-H-BOTTOM_SAFE_PX)/U  # UI widgets remain bottom-anchored but clear Android's gesture-navigation inset
 j['children']=[c for c in j['children'] if c['name'] not in ('TouchBeltFrame','BeltPopupArrow','TouchHealthBallRing','TouchManaBallRing')]   # v4 底图取代 | Replaced by the v4 base image
 by={c['name']:c for c in j['children']}
 def rect(n,**k):
@@ -87,8 +90,9 @@ sb=q(2*g['BR']/(348*U)*T.get('ball',1.0)); ts=T.get('ts',1.4)
 for n,c in (('HealthBall',g['LBC']),('ManaBall',g['RBC'])):
     rect(n,x=X(c[0])-174*sb,y=Y(c[1])-175*sb,scale=sb); by[n]['fields']['rect'].pop('width',None); by[n]['fields']['rect'].update(width=348,height=350)
     vd=[k for k in by[n]['children'] if k['name']=='ValueDisplay'][0]['fields']      # 数值：球顶上方居中（效果图 YB 基线），底图在球之后画，原位置会被雕像盖住 | Values: centered above the orb top (mockup YB baseline); the base image is drawn after the orb, so the original position would be covered by the statue
-    vd['rect']={'x':-6000,'y':0}   # 原生数值文字挪出屏幕：改由前端按效果图字形原生分辨率画（gen 产出 life / mana 字形） | Native value text moved off screen: now drawn by the front end at native resolution with the mockup glyphs (gen outputs the life / mana glyphs)
-    continue
+    if not ANDROID:
+        vd['rect']={'x':-6000,'y':0}   # iOS drawV4 renders replacement glyphs.
+        continue
     vd['rect']={'x':T.get('tx',-174),'y':round((Y(g['YB']-T.get('txt',30))-(Y(c[1])-175*sb))/sb,1),'width':348,'scale':ts}
     vd.setdefault('style',{})['alignment']={'h':'center'}
 s6=g['slots'][5]; sl=q(T.get('lvl',0.9)); lc=((s6[0]+s6[2])/2,(s6[1]+s6[3])/2)
@@ -107,19 +111,23 @@ by['Belt']['fields'].pop('cellOffsetInRow',None); by['Belt']['fields'].pop('item
 s5=g['slots'][5]; ss6=T.get('s6',1.0); rect('SkillButton6',x=X((s5[0]+s5[2])/2)-63*ss6+T.get('s6x',0),y=Y((s5[1]+s5[3])/2)-63*ss6+T.get('s6y',0),scale=ss6)
 # SkillButton6（ZR 位）实例保留供绑定读取，排在底图之前、由第 5 格底图盖住（显示的是 ZR 位绑定，不是回城）
 # SkillButton6 (ZR position) instance kept for reading bindings, ordered before the base image and covered by the slot 5 base image (what it shows is the ZR position binding, not town portal)
-kids=j['children']; sb6=next(c for c in kids if c['name']=='SkillButton6'); kids.remove(sb6); kids.insert(kids.index(by['Overlay']),sb6)
+kids=j['children']
+if not ANDROID:
+    sb6=next(c for c in kids if c['name']=='SkillButton6'); kids.remove(sb6); kids.insert(kids.index(by['Overlay']),sb6)
 es=q(T.get('exp',1.5)); rect('ExpBar',x=X(g['EX0'])+T.get('ex',0),y=Y(g['EY'])+T.get('ey',0),scale=es)
 # 原生 ExpBar 实例保留、排到底图之前被盖住：经验条（底槽 + 填充 + 20 等分刻度）与「Lv · %」由前端 UIKit 按效果图画（原生条与效果图几何对不上、也不带文字）
 # Native ExpBar instance kept, ordered before the base image so it is covered: the experience bar (trough + fill + 20 equal tick marks) and "Lv · %" are drawn by the front-end UIKit per the mockup (the native bar's geometry does not match the mockup, and it carries no text)
-eb=by['ExpBar']; kids.remove(eb); kids.insert(kids.index(by['Overlay']),eb)
-eb['fields']['rect']['y']=round(Y(g['slots'][1][1]+30),1)   # 挪进石条区域（七格上沿之外底图盖不住，Mac 预览露出黄条） | Moved into the stone strip area (outside the top edge of the seven slots the base image cannot cover it, and the Mac preview shows a yellow bar)
-eb['fields']['rect']['x']=-6000   # 挪出屏幕（实例仍在）。靠底图盖是盖不住的：原生条放大 1.5 倍后比底栏还长，填充随经验伸长，过了约一半就从底图右端伸出去、 | Moved off screen (instance still exists). Covering it with the base image does not work: the native bar scaled 1.5× is longer than the bottom bar, the fill grows with experience, and past about halfway it sticks out of the base image's right end,
+if not ANDROID:
+    eb=by['ExpBar']; kids.remove(eb); kids.insert(kids.index(by['Overlay']),eb)
+    eb['fields']['rect']['y']=round(Y(g['slots'][1][1]+30),1)
+    eb['fields']['rect']['x']=-6000
                                   # 横穿法力球——球里有法力时被液面挡住看不出，法力见底时就是球里一条黄线、一直伸到球右边外面（真机实例：2 级、经验 73%、法力 1/21）
                                   # Runs across the mana orb -- when the orb has mana it is hidden by the liquid surface and cannot be seen; when mana bottoms out it is a yellow line inside the orb extending all the way out past the orb's right side (real device instance: level 2, experience 73%, mana 1/21)
 # 原生技能键 1–5：实例保留（绑定读取），挪到第 5 格底图下藏住——右侧技能区由 iOS 画 PC 版圆形技能键，原生方框不再露在圆圈下
 # Native skill buttons 1–5: instances kept (bindings are read from them), moved under the slot 5 base image to hide them -- the right-side skill area has iOS draw PC-style round skill buttons, and the native square frames no longer show under the circles
-for n in ('SkillButton1','SkillButton2','SkillButton3','SkillButton4','SkillButton5'):
-    w_=by[n]; kids.remove(w_); kids.insert(kids.index(by['Overlay']),w_); w_['fields']['rect']=dict(by['SkillButton6']['fields']['rect']); w_['fields']['anchor']={'x':0.5,'y':1}
+if not ANDROID:
+    for n in ('SkillButton1','SkillButton2','SkillButton3','SkillButton4','SkillButton5'):
+        w_=by[n]; kids.remove(w_); kids.insert(kids.index(by['Overlay']),w_); w_['fields']['rect']=dict(by['SkillButton6']['fields']['rect']); w_['fields']['anchor']={'x':0.5,'y':1}
 json.dump(j,open(f'{OUT}/hud.json','w'),ensure_ascii=False,indent=1)
 
 # ---- 前端 UIKit 素材（hud_v4_ui/）：几何（效果图像素，前端按 屏高/1320 换算、以屏宽中线对齐效果图 x=1434）、预渲染字形、难度数字、选择条格子 ----

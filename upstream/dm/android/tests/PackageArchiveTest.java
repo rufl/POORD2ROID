@@ -60,7 +60,7 @@ public final class PackageArchiveTest {
     }
 
     private static String manifestWithOverlay() {
-        return manifest(1, 9, 2, 3).replace("\"shaders\": 3", "\"shaders\": 3, \"romfs_overlay\": 2");
+        return manifest(1, 9, 2, 3).replace("\"shaders\": 3", "\"shaders\": 3, \"romfs_overlay\": 4");
     }
 
     // 与九个模块 + 2 个 romfs + 3 个着色器配套的清单。
@@ -80,9 +80,11 @@ public final class PackageArchiveTest {
     }
 
     private static String[] completeWithOverlay() {
-        String[] entries = Arrays.copyOf(complete(), complete().length + 2);
-        entries[entries.length - 2] = "romfs_overlay/data/.build.config";
-        entries[entries.length - 1] = "romfs_overlay/data/large-font.data";
+        String[] entries = Arrays.copyOf(complete(), complete().length + 4);
+        entries[entries.length - 4] = "romfs_overlay/data/.build.config";
+        entries[entries.length - 3] = "romfs_overlay/data/touch-layout.data";
+        entries[entries.length - 2] = "romfs_overlay/ctrl_touch";
+        entries[entries.length - 1] = "romfs_overlay/touch_strings.tsv";
         return entries;
     }
 
@@ -158,18 +160,19 @@ public final class PackageArchiveTest {
         File good = tempDir("good");
         PackageArchive.Counts counts = unpack(packageZip(manifestWithOverlay(), completeWithOverlay()),
                                               new File(good, "assets"), new File(good, "modules"));
-        check(counts.game == 9 && counts.romfs == 2 && counts.romfsOverlay == 2 && counts.shaders == 3,
-              "complete package accepts original and overlay resources and reports actual counts");
+        check(counts.game == 9 && counts.romfs == 2 && counts.romfsOverlay == 4 && counts.shaders == 3,
+              "complete package accepts original resources and touch overlay sidecars and reports actual counts");
         check(new File(good, "modules/libdmguest_main.so").isFile(), "modules land in internal storage");
         check(!new File(good, "assets/game").exists(), "modules do not land in external storage");
         check(new File(good, "assets/manifest.json").isFile(), "completion marker is written last");
         check(new File(good, "assets/romfs/data/build_key.txt").isFile(), "RomFS lands in external storage");
         check(new File(good, "assets/romfs_overlay/data/.build.config").isFile()
-              && new File(good, "assets/romfs_overlay/data/large-font.data").isFile(),
-              "generated RomFS overlay lands in the imported package");
+              && new File(good, "assets/romfs_overlay/data/touch-layout.data").isFile()
+              && new File(good, "assets/romfs_overlay/ctrl_touch").isFile()
+              && new File(good, "assets/romfs_overlay/touch_strings.tsv").isFile(),
+              "overlay archive and touch-layout sidecars land in the imported package");
         check(new File(good, "assets/derived.tsv").isFile(), "root derived.tsv is accepted");
-        check(new File(good, "modules/subsdk0.gates.tsv").isFile(),
-              "empty layout file remains valid");
+        check(new File(good, "modules/subsdk0.gates.tsv").isFile(), "empty layout file remains valid");
 
         unpack(packageZip(manifest(1, 9, 2, 3), complete()), new File(good, "assets"), new File(good, "modules"));
         check(!new File(good, "assets/romfs_overlay").exists(),

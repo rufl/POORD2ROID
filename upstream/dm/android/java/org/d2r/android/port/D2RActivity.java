@@ -78,6 +78,7 @@ public final class D2RActivity extends NativeActivity {
     // The frame rate target: >0 a fixed rate, <0 follow the screen's maximum refresh rate. It can change at run time
     // and takes effect on the next present.
     private static native void setPresentHz(int hz);
+    private static native void setFontLarge(boolean large);
     private static native void setMenuOpen(boolean open);
     private static native void setSkipSaveOnExit(boolean skip);
     private static native void trimGpuBuffers();
@@ -96,7 +97,8 @@ public final class D2RActivity extends NativeActivity {
     // easy to hit by accident and would quit the whole run. So back opens this menu instead: frame rate display /
     // on-screen controls / quality / exit game. Press back again (or tap outside) to close it.
     private PopupWindow menuPopup;
-    private TextView menuOverlayRow, menuControlsRow, menuQualityRow, menuFrameRateRow;
+    private TextView menuOverlayRow, menuControlsRow, menuQualityRow, menuFrameRateRow, menuFontLabel;
+    private boolean fontLarge;
     private boolean overlayEnabled = true;
     private boolean controlsEnabled = true;
     private int qualityPreset;                                  // 0 自动 / 1 高质量 / 2 平衡 / 3 性能 / 4 超性能 | 0 auto / 1 high / 2 balanced / 3 performance / 4 ultra performance
@@ -191,6 +193,23 @@ public final class D2RActivity extends NativeActivity {
         menuFrameRateRow = menuRow();
         menuFrameRateRow.setOnClickListener(v -> { presentHzIndex = (presentHzIndex + 1) % PRESENT_HZ_VALUES.length; applyPresentHz(); updateMenuLabels(); });
         column.addView(menuFrameRateRow);
+        LinearLayout fontRow = new LinearLayout(this);
+        fontRow.setOrientation(LinearLayout.HORIZONTAL);
+        TextView minus = menuRow();
+        minus.setText("−");
+        minus.setGravity(Gravity.CENTER);
+        minus.setOnClickListener(v -> setFontLevel(false));
+        fontRow.addView(minus, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        menuFontLabel = menuRow();
+        menuFontLabel.setGravity(Gravity.CENTER);
+        menuFontLabel.setClickable(false);
+        fontRow.addView(menuFontLabel, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 3f));
+        TextView plus = menuRow();
+        plus.setText("+");
+        plus.setGravity(Gravity.CENTER);
+        plus.setOnClickListener(v -> setFontLevel(true));
+        fontRow.addView(plus, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        column.addView(fontRow);
         // 存档导入 / 导出：走系统的文件选择器，导出到玩家选的位置（下载目录等），导入也是玩家选文件。
         // Save import/export goes through the system file picker: export writes to wherever the player picks
         // (Downloads and so on), import reads a file the player picks.
@@ -226,6 +245,8 @@ public final class D2RActivity extends NativeActivity {
         menuControlsRow.setText(text("dmAndroidMenuControls") + "：" + (controlsEnabled ? on : off));
         menuQualityRow.setText(text("dmAndroidMenuQuality") + "：" + text(QUALITY_KEYS[qualityPreset]));
         if (menuFrameRateRow != null) menuFrameRateRow.setText(text("dmAndroidMenuFrameRate") + "：" + frameRateLabel());
+        if (menuFontLabel != null) menuFontLabel.setText(text("dmAndroidMenuFont") + "：" +
+            text(fontLarge ? "dmAndroidMenuFontLarge" : "dmAndroidMenuFontNormal"));
     }
 
     // 帧率档的当前值与它的写法（配置里同一个键：0 = 跟随屏幕，其余是固定帧率）。
@@ -250,6 +271,16 @@ public final class D2RActivity extends NativeActivity {
         File file = configFile();
         if (file != null) LaunchSettings.write(file, "present_hz", presentHzSetting());
         Log.i("D2RAndroid", "[fps] target=" + presentHzSetting() + " Hz");
+    }
+
+    private void setFontLevel(boolean large) {
+        if (fontLarge == large) return;
+        fontLarge = large;
+        setFontLarge(large);
+        File file = configFile();
+        if (file != null) LaunchSettings.write(file, "font_large", large ? "1" : "0");
+        Log.i("D2RAndroid", "[font] requested native level=" + (large ? "large" : "normal"));
+        updateMenuLabels();
     }
 
     // 「帧率显示」写回配置：重启后还记得（native 启动时读 DM_DEBUG_OVERLAY）。
@@ -448,6 +479,7 @@ public final class D2RActivity extends NativeActivity {
         // (only an explicit 1 means on).
         String overlaySetting = LaunchSettings.read(configFile(), "debug_overlay");
         overlayEnabled = overlaySetting != null && overlaySetting.equals("1");
+        fontLarge = "1".equals(LaunchSettings.read(configFile(), "font_large"));
         // 帧率档：配置里写了就按配置；缺省上限为 60 Hz。原生启动与这里的菜单标签使用同一设置。
         // Use the saved frame-rate preset when present; default to a 60 Hz cap. Native startup and this menu label share the setting.
         String hzSetting = LaunchSettings.read(configFile(), "present_hz");

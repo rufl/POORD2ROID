@@ -21,6 +21,7 @@ int dm_cursor_pending(void);   // 还有几下 A 扣着没送到游戏（光标�
 // 原生点击（界面鼠标消息注入，见 dm_cursor.c）：前端把触点交过来，宿主在游戏取手柄处逐帧发给界面根控件
 // Native click (UI mouse message injection, see dm_cursor.c): the front end hands over the touch points, and the host sends them frame by frame to the UI root widget where the game reads the controller
 void dm_ui_send_queue(const char *spec);   // 「类别:动作[:参数]」；下一次取手柄时往界面根控件发（按键脚本 MSG 步用） | 'category:action[:argument]'; sent to the UI root widget on the next controller read (used by the MSG step of key scripts)
+void dm_ui_font_large_request(int large);   // Native two-level font request: 0 normal, 1 low-vision large. Executed on the game main thread.
 int dm_ui_fe_drag_ok(void);                      // 前端此刻纵向拖能否当滚动（删除确认 / 模式页 / 起名页 / 确认框开着时不能） | Whether a vertical drag in the front end can count as a scroll right now (not while the delete confirmation / mode page / naming page / a confirmation box is open)
 void dm_ui_touch(int phase, float nx, float ny);   // phase：0 按下 1 移动 2 抬起 3 作废（改成滚动）；坐标 = 出图画面归一化 [0,1] | phase: 0 down, 1 move, 2 up, 3 cancelled (turned into a scroll); coordinates = normalized to the rendered picture [0,1]
 void dm_ui_mouse_pump(void);

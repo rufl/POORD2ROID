@@ -95,6 +95,7 @@ static int parse_settings(char *content, dm_android_launch_settings *settings,
             else if (!strcmp(key, "debug_overlay")) bit = 4;
             else if (!strcmp(key, "resolution")) bit = 8;
             else if (!strcmp(key, "present_hz")) bit = 16;
+            else if (!strcmp(key, "font_large")) bit = 32;
             else return fail(error, capacity, "unknown launch settings key on line %u: %s", line_number, key);
             if (seen & bit) return fail(error, capacity, "duplicate launch settings key on line %u: %s", line_number, key);
             if (bit == 1) {
@@ -123,6 +124,10 @@ static int parse_settings(char *content, dm_android_launch_settings *settings,
                 if (hz != 0 && (hz < 24 || hz > 240))
                     return fail(error, capacity, "launch settings line %u: present_hz must be 0 or 24-240", line_number);
                 settings->present_hz = (int)hz;
+            } else if (bit == 32) {
+                if (!strcmp(value, "0")) settings->font_large = 0;
+                else if (!strcmp(value, "1")) settings->font_large = 1;
+                else return fail(error, capacity, "launch settings line %u: font_large must be 0 or 1", line_number);
             } else {
                 if (!strcmp(value, "0")) settings->input_receipts = 0;
                 else if (!strcmp(value, "1")) settings->input_receipts = 1;
@@ -179,7 +184,7 @@ int dm_android_launch_settings_apply(const char *temporary_directory,
                                      char *error, size_t error_capacity) {
     if (error && error_capacity) error[0] = 0;
     char path[SETTINGS_PATH_BYTES], content[SETTINGS_BYTES + 1];
-    dm_android_launch_settings settings = {0, -1, -1, -1, -1, -1, -1};
+    dm_android_launch_settings settings = {0, -1, -1, -1, -1, -1, -1, -1};
     if (!make_path(temporary_directory, "launch-settings.conf", path, error, error_capacity)) return 0;
     if (!read_settings(path, content, &settings.present, error, error_capacity)) return 0;
     if (!settings.present) { if (result) *result = settings; return 1; }
@@ -187,13 +192,14 @@ int dm_android_launch_settings_apply(const char *temporary_directory,
     // 所有内容与需要的固定路径都验证完才进入环境写入；省略的键不清空其他来源设置。
     // Validate all content and required fixed paths before writing the environment; omitted keys do not clear settings supplied elsewhere.
     if (settings.input_receipts == 1 && !make_path(temporary_directory, "input-receipts.jsonl", path, error, error_capacity)) return 0;
-    environment_change changes[4] = {{0}};
+    environment_change changes[5] = {{0}};
     size_t count = 0;
     if (settings.operation_mode != -1) changes[count++] = (environment_change){.name = "DM_OPMODE", .value = settings.operation_mode ? "1" : "0"};
     if (settings.input_receipts != -1) changes[count++] = (environment_change){.name = "DM_HID_RECEIPT_LOG", .value = settings.input_receipts ? path : NULL};
     // 调试浮层开关：显式写 "0" 而不是清空变量，因为“关掉”本身就是要表达的设置。
     // Debug overlay toggle: write "0" explicitly rather than unsetting, because "hidden" is itself the setting.
     if (settings.debug_overlay != -1) changes[count++] = (environment_change){.name = "DM_DEBUG_OVERLAY", .value = settings.debug_overlay ? "1" : "0"};
+    if (settings.font_large != -1) changes[count++] = (environment_change){.name = "DM_FONT_LARGE", .value = settings.font_large ? "1" : "0"};
     // 分辨率：写成 DM_GAME_RES=宽x高，由 front_game_res 读（与 Mac/iOS 同一变量同一语义）。
     // Resolution: written as DM_GAME_RES=<w>x<h>, read by front_game_res, the same variable and semantics as Mac and iOS.
     char resolution[16];

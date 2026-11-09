@@ -28,6 +28,8 @@ static dm_vk_driver vk_api;
 #include <dlfcn.h>
 
 #ifdef __ANDROID__
+__attribute__((weak)) int dm_uiscreen_ingame(void);
+__attribute__((weak)) int dm_screen_real(int *width,int *height);
 __attribute__((weak)) void dm_uiscreen_surface_size(int width, int height);
 __attribute__((weak)) void dm_uiscreen_presented_size(int width, int height);
 #endif
@@ -1248,9 +1250,27 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
         // 首布局转换与 acquire 的 TRANSFER wait 相接，不越过显示引擎对 image 的使用。
         // Connect the first layout transition to the acquire TRANSFER wait, after the presentation engine's image use.
         vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
-        int sx = crop ? crop[0] : 0, sy = crop ? crop[1] : 0, sw = crop && crop[2] > 0 ? crop[2] : t->d.width, sh = crop && crop[3] > 0 ? crop[3] : t->d.height;
+        int rw=0,rh=0;
+        int wide_gameplay=dm_uiscreen_ingame&&dm_screen_real&&dm_uiscreen_ingame()&&
+            dm_screen_real(&rw,&rh)&&(int64_t)rw*9>(int64_t)rh*16;
+        int sx,sy,sw,sh;
+        int crop_result=dm_ui_present_source_rect((int)t->d.width,(int)t->d.height,crop,
+                                                  wide_gameplay,rw,rh,&sx,&sy,&sw,&sh);
+        if(crop_result<0)die("Vulkan present source dimensions invalid: %ux%u",t->d.width,t->d.height);
+        static int last_rect[12]={-1};
+        int rect[12]={crop_result,(int)t->d.width,(int)t->d.height,
+            crop?crop[0]:0,crop?crop[1]:0,crop?crop[2]:0,crop?crop[3]:0,
+            sx,sy,sw,sh,(int)wide_gameplay};
+        int changed=0;for(int i=0;i<12;i++)if(rect[i]!=last_rect[i]){changed=1;break;}
+        if(changed){memcpy(last_rect,rect,sizeof rect);
+            LOG("[vulkan-present-rect] mode=%s policy=%d source=%ux%u window_crop=%d,%d %dx%d selected=%d,%d %dx%d surface=%ux%u",
+                wide_gameplay?"wide-gameplay":"ui-or-16:9",crop_result,t->d.width,t->d.height,
+                rect[3],rect[4],rect[5],rect[6],sx,sy,sw,sh,screen_extent.width,screen_extent.height);}
         if (dm_uiscreen_presented_size) dm_uiscreen_presented_size(sw, sh);
         int dw,dh,x,y;dm_ui_fit_rect(sw,sh,(int)screen_extent.width,(int)screen_extent.height,&x,&y,&dw,&dh);
+        if(changed)LOG("[vulkan-present-fit] opmode=%s active=%dx%d selected=%dx%d destination=%d,%d %dx%d scale=%.6f/%.6f aspect_error_ppm=%.1f",
+            getenv("DM_OPMODE")?getenv("DM_OPMODE"):"unset",rw,rh,sw,sh,x,y,dw,dh,sw>0?(double)dw/sw:0.0,sh>0?(double)dh/sh:0.0,
+            sw>0&&sh>0&&dw>0&&dh>0?((double)dw*sh/((double)dh*sw)-1.0)*1000000.0:0.0);
         // 覆盖不全时，默认整屏清黑；A/B模式只用黑色1x1图像搬运未覆盖的边栏。
         // Default mode clears partial coverage; the opt-in A/B mode blits a black 1x1 image into the unused bars.
         if (x != 0 || y != 0 || dw != (int)screen_extent.width || dh != (int)screen_extent.height) {

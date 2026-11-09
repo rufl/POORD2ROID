@@ -1023,13 +1023,14 @@ PRESENT = {
     'controller/console/switch/playerinventoryexpansionlayouthd.json': _inv_rw,   # 物品栏 + 符文之语清单控件（见 _RW） | Inventory + runeword list widgets (see _RW)
     'controller/playerinventoryexpansionlayouthd.json': _inv_touch(False),
 }
-# Android uses a 1.5× accessibility scale, not a fixed 60-point font. A fixed size made
-# 26/28/30-point labels 2–2.3× larger and clipped dialogue text. Scale only font sizes
-# present in each source profile; leave inherited sizes and panel geometry unchanged.
+# Android font overlay applies the existing 1.5× accessibility scale plus the requested 15%
+# relative increase (1.725× source values). Numeric pointSize overrides are included too.
+# Handheld HD must inherit ConsoleHD geometry: ConsoleLV's own profile explicitly marks
+# rebasing to ConsoleHD as pending and places wide-screen panels using the low-resolution base.
 def _scale_profile_font_sizes(text):
     def scale(match):
-        return match.group(1) + str((int(match.group(2)) * 3 + 1) // 2)
-    scaled, count = re.subn(r'("(?:[A-Za-z]+)?FontSize"\s*:\s*)(\d+)', scale, text)
+        return match.group(1) + str((int(match.group(2)) * 69 + 20) // 40)
+    scaled, count = re.subn(r'("(?:[A-Za-z]+)?FontSize"\s*:\s*|"\s*pointSize"\s*:\s*)(\d+)', scale, text)
     if count == 0:
         raise SystemExit('touch_layout：profile 没有可缩放的字号')
     return scaled
@@ -1040,13 +1041,15 @@ def build_profile(romfs, outdir):
     anchor = '"XMediumFontSize": 30,\n    "MediumFontSize": 28,\n    "SmallFontSize": 26,\n'
     if text.count(anchor) != 1: raise SystemExit('touch_layout：_profileConsoleHD 的字号段不是原样（原版变了？）')
     o = os.path.join(outdir, 'profile_consolehd.json'); open(o, 'w', encoding='utf-8').write(_scale_profile_font_sizes(text)); repl = {path.lower(): o}
-    # 掌机档（DM_OPMODE=0：过热降级会切过去，触屏脚本也用它）走另一份 _profileHandheldHD；同样按原字号逐项放大。
-    # The handheld profile (DM_OPMODE=0: thermal fallback and touch controls use it) is separate; scale its own source values too.
     path, text = read_layout(romfs, 'controller/_profilehandheldhd.json'); text = text.replace('\r\n', '\n')
     anchor = '"XMediumLargeFontSize": 36,\n    "MediumLargeFontSize": 36,\n    "XMediumFontSize": 34,\n'
     if text.count(anchor) != 1: raise SystemExit('touch_layout：_profileHandheldHD 的字号段不是原样（原版变了？）')
+    if text.count('"basedOn": "ConsoleLV"') != 1:
+        raise SystemExit('touch_layout：_profileHandheldHD 不再继承 ConsoleLV，检查布局基线')
+    text = text.replace('"basedOn": "ConsoleLV"', '"basedOn": "ConsoleHD"', 1)
     o = os.path.join(outdir, 'profile_handheldhd.json'); open(o, 'w', encoding='utf-8').write(_scale_profile_font_sizes(text)); repl[path.lower()] = o
     return repl
+
 
 # NPC 对话菜单（交谈 / 交易 / 雇佣…）的行距：原版每行约 66 单位 = 2.6 毫米，相邻行必然点串；行间距 10 → 124，行距约 180 单位 = 7 毫米（手指目标下限，热区审计）。
 # 只改行距。选项本身不认鼠标点击：把 Switch 版关掉的 isHoverList 改回 true 也没用（Mac 宿主注入点击实测，点了无消息、高亮不动）——点选要由触摸层换成方向键下 ×N + A。

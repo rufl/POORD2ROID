@@ -33,6 +33,10 @@ static float g_safe_l, g_safe_r;
    The strip along the bottom edge of the screen that belongs to the system (points): a swipe up starting here is taken by the system as a bottom-edge gesture (on iPad two in a row pull out the Dock), and movement is exactly a repeated push upward starting from the same place.
       A touch starting in this strip is not treated as the stick, and its release is not treated as a ground tap; a stick drag that started above and moves in keeps its hold as usual. Only the iPad front end passes a non-zero value; on phones it is always 0. */
 static float g_edge_b;
+static float g_hud_bottom;
+// Vertical displacement of the generated bottom HUD in 1320-high design pixels.
+// Default zero preserves iOS; Android sets this to the same 48 as gen_hud_v4.py.
+void dm_tc_set_hud_bottom(float design_pixels) { g_hud_bottom = isfinite(design_pixels) && design_pixels > 0 ? design_pixels : 0; }
 void dm_tc_set_edge_bottom(float bottom) { g_edge_b = isfinite(bottom) && bottom > 0 ? bottom : 0; }
 void dm_tc_set_safe_insets(float left, float right) { g_safe_l = isfinite(left) && left > 0 ? left : 0; g_safe_r = isfinite(right) && right > 0 ? right : 0; }
 
@@ -41,7 +45,8 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     l->width = isfinite(width) && width > 0 ? width : 0;
     l->height = isfinite(height) && height > 0 ? height : 0;
     float k = scale_for(l);
-    float main_x = l->width - 56 * k, main_y = l->height - 82 * k;
+    float u = l->height / 1320.0f, hud_bottom = g_hud_bottom * u;
+    float main_x = l->width - 56 * k, main_y = l->height - 82 * k - hud_bottom;
     { float over = main_x + 40*k - (l->width - g_safe_r); if (over > 0) main_x -= over; }   /* 右侧一组里最靠右的是主技能键（半径 40） | The rightmost one in the right-side group is the main skill key (radius 40) */
     l->target[DM_TC_MAIN] = (dm_tc_target){ main_x, main_y, 40*k, DM_BTN_A };
     /* 四分之一弧的单位向量：180°、150°、120°、90°。 | Unit vectors of the quarter arc: 180°, 150°, 120°, 90°. */
@@ -59,12 +64,11 @@ void dm_tc_layout_make(dm_tc_layout *l, float width, float height) {
     /* 腰带四列对十字键：左 = 第 1 列、上 = 第 2 列、下 = 第 3 列、右 = 第 4 列（原版实测：按「右」第 4 列减、按「下」第 3 列减；首版把后两个写反了，真机才撞到） | The four belt columns map to the D-pad: left = column 1, up = column 2, down = column 3, right = column 4 (measured in the original game: pressing "right" decrements column 4, pressing "down" decrements column 3; the first version had the last two swapped, which was only hit on a real device) */
     const uint64_t bottom[5] = {DM_BTN_LEFT, DM_BTN_UP, DM_BTN_DOWN, DM_BTN_RIGHT, DM_BTN_PLUS};
     const int cell[5] = {1, 2, 3, 4, 5};
-    float u = l->height / 1320.0f;
     for (int i = 0; i < 5; ++i)
-        l->target[DM_TC_BELT1+i] = (dm_tc_target){l->width/2+(1090+120*cell[i]-1434)*u, 1241.5f*u, 57*u, bottom[i]};
+        l->target[DM_TC_BELT1+i] = (dm_tc_target){l->width/2+(1090+120*cell[i]-1434)*u, 1241.5f*u-hud_bottom, 57*u, bottom[i]};
     { const dm_tc_target *s4 = &l->target[DM_TC_SKILL4]; l->target[DM_TC_PORTAL] = (dm_tc_target){s4->x, s4->y-s4->r-12*k-26*k, 26*k, 0}; }
     /* 第 0 格难度与选择条：选择条 8 格同格宽、格距 120，中线对齐两球中线（效果图 1390），格心 y = 1051.5（七格之上、避开数值文字） | Cell 0 difficulty and the selector bar: the selector bar has 8 cells of the same cell width, cell pitch 120, centerline aligned with the centerline between the two orbs (mock 1390), cell center y = 1051.5 (above the seven cells, clear of the value text) */
-    l->diff = (dm_tc_target){l->width/2+(1090-1434)*u, 1241.5f*u, 57*u, 0};
+    l->diff = (dm_tc_target){l->width/2+(1090-1434)*u, 1241.5f*u-hud_bottom, 57*u, 0};
     for (int i = 0; i < 8; ++i) l->pick[i] = (dm_tc_target){l->width/2+(1390+(i-3.5f)*120-1434)*u, 1051.5f*u, 57*u, 0};
     l->target[DM_TC_MAP] = (dm_tc_target){l->width-30*k, 30*k, 22*k, DM_BTN_MINUS};
     /* 技能组切换：主技能左下、技能一下方，避开主技能与弧上四键 | Skill set switch: lower-left of the main skill, below skill one, clear of the main skill and the four keys on the arc */

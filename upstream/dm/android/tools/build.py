@@ -54,11 +54,11 @@ def run(args, **kwargs):
     subprocess.run(list(map(str, args)), check=True, **kwargs)
 
 
-PANVK_ARCHIVE_SHA256 = "04d82e2f35e4e80138f9a407ec4222e40908b32196eb7484355993e6c5fdc376"
-PANVK_LIBRARY_SHA256 = "6baf04f6075fe57d0dc1738039cf91d8db6ce98c9203dd9dc3d638f42c49e62a"
+PANVK_ARCHIVE_SHA256 = "7e97db4d79d81ec9461d1e0676b62a865561cb56e21c151693aa25ffbe749f1c"
+PANVK_LIBRARY_SHA256 = "80acd461bdf07f5fb99af5c7f516e272103340b6775c22dcd347a6d418c7ac0d"
 
-MALISX2_ARCHIVE_SHA256 = "835f980506ed46fa51925fd279b256d23b0ddf481ffd1ab39be2fee275cf8bf8"
-MALISX2_LIBRARY_SHA256 = "0148e1ea6263653ef376007274eefdf1d58fb63eadf66e2290c6cc49219c0365"
+MALISX2_ARCHIVE_SHA256 = "feb44fcb0c459894cbf1b4e9403fd756db74f54e9b889fd652fbdc4043689034"
+MALISX2_LIBRARY_SHA256 = "89f28af3610c4dbc8797cffc1eea73a1f2af32bc2fea47ea719e119dc4e205f7"
 
 
 def package_malisx2(archive_path, assets, licenses):
@@ -72,8 +72,8 @@ def package_malisx2(archive_path, assets, licenses):
     try:
         with zipfile.ZipFile(archive_path) as archive:
             metadata = json.loads(archive.read("meta.json"))
-            if (metadata.get("name") != "malisx2 0.4.0 (63e307e63a)"
-                    or metadata.get("packageVersion") != "0.4.0+63e307e63a"
+            if (metadata.get("name") != "malisx2 0.4.1 (a833123f35)"
+                    or metadata.get("packageVersion") != "0.4.1+a833123f35"
                     or metadata.get("minApi") != 29
                     or metadata.get("libraryName") != "libvulkan_malisx2.so"):
                 sys.exit("Unexpected MaliSX2 package metadata")
@@ -88,16 +88,16 @@ def package_malisx2(archive_path, assets, licenses):
     temporary.replace(output / "libvulkan_malisx2.so")
     (output / "driver.sha256").write_text(MALISX2_LIBRARY_SHA256 + "\n", encoding="ascii")
     (output / "NOTICE.txt").write_text(
-        "MaliSX2 0.4.0 (63e307e63a), bundled from bmdhacks/malisx2.\n"
-        "Release: https://github.com/bmdhacks/malisx2/releases/tag/v0.4.0\n"
+        "MaliSX2 0.4.1 (a833123f35), bundled from bmdhacks/malisx2.\n"
+        "Release: https://github.com/bmdhacks/malisx2/releases/tag/v0.4.1\n"
         "Mesa-derived components use their respective licenses; source is pinned at\n"
-        "https://github.com/bmdhacks/armsx2-turnip/tree/f59c211100b174191d9df540451e94b2d5cb2b26\n"
+        "https://github.com/bmdhacks/armsx2-turnip/tree/45ff8fac44d9132118d0dddd2ff49f5d827533fb\n"
         "Experimental alternate Vulkan driver. D2R/Android window presentation and Xiaomi 11T gameplay are unverified.\n"
         "Upstream reports MSAA is not implemented; some applications may fail.\n",
         encoding="utf-8")
     shutil.copyfile(ROOT / "prebuilt/MaliSX2-LICENSE.txt", licenses / "MaliSX2-LICENSE.txt")
     shutil.copyfile(output / "NOTICE.txt", licenses / "MaliSX2-NOTICE.txt")
-    print("MaliSX2 0.4.0 ICD: archive and library checksums verified", flush=True)
+    print("MaliSX2 0.4.1 ICD: archive and library checksums verified", flush=True)
 
 
 def sha256_file(path):
@@ -119,8 +119,8 @@ def package_panvk(archive_path, assets, licenses):
     try:
         with zipfile.ZipFile(archive_path) as archive:
             metadata = json.loads(archive.read("meta.json"))
-            if (metadata.get("name") != "PanVK Mali Bifrost/Valhall (kbase) (Mesa 27.0.0-devel-6dc24ce)"
-                    or metadata.get("packageVersion") != "7"
+            if (metadata.get("name") != "PanVK Mali Bifrost and Valhall (kbase) (Mesa 27.0.0-devel-58f2c55)"
+                    or metadata.get("packageVersion") != "11"
                     or metadata.get("libraryName") != "libvulkan_panfrost.so"):
                 sys.exit("Unexpected PanVK package metadata")
             with archive.open("libvulkan_panfrost.so") as source, temporary.open("wb") as target:
@@ -135,11 +135,11 @@ def package_panvk(archive_path, assets, licenses):
         temporary.unlink(missing_ok=True)
         sys.exit("Invalid PanVK package: " + str(error))
     temporary.replace(panvk_assets / "libvulkan_panfrost.so")
-    for stale_notice in ("PanVK-JimVulkan-r8.txt", "PanVK-JimVulkan-r8-android-wsi.txt",
-                         "PanVK-FristOneRR-v3.7.0.txt"):
+    for stale_notice in ("PanVK-JimVulkan-r9.txt", "PanVK-JimVulkan-r8.txt",
+                         "PanVK-JimVulkan-r8-android-wsi.txt", "PanVK-FristOneRR-v3.7.0.txt"):
         (licenses / stale_notice).unlink(missing_ok=True)
-    shutil.copyfile(panvk_assets / "NOTICE.txt", licenses / "PanVK-JimVulkan-r9.txt")
-    print("PanVK JimVulkan r9 ICD: verified and bundled", flush=True)
+    shutil.copyfile(panvk_assets / "NOTICE.txt", licenses / "PanVK-JimVulkan-r10.txt")
+    print("PanVK JimVulkan r10 ICD: verified and bundled", flush=True)
 
 
 
@@ -223,16 +223,28 @@ def main():
                         help="随 APK 分发的 Turnip 驱动；默认用仓库里的 dm/android/prebuilt/turnip/")
     parser.add_argument("--no-turnip", action="store_true",
                         help="不出内置 Turnip 驱动")
-    parser.add_argument("--panvk", type=Path, default=ROOT / "prebuilt/mali-panvk-27.0.0-devel-r9.zip",
-                        help="pinned JimVulkan r9 package; archive and library SHA-256 are verified")
+    parser.add_argument("--panvk", type=Path, default=ROOT / "prebuilt/mali-panvk-27.0.0-devel-r10.zip",
+                        help="pinned JimVulkan r10 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-panvk", action="store_true",
                         help="明确构建不含 PanVK 的 APK")
-    parser.add_argument("--malisx2", type=Path, default=ROOT / "prebuilt/malisx2-0.4.0-63e307e63a.zip",
-                        help="pinned MaliSX2 0.4.0 package; archive and library SHA-256 are verified")
+    parser.add_argument("--malisx2", type=Path, default=ROOT / "prebuilt/malisx2-0.4.1-a833123f35.zip",
+                        help="pinned MaliSX2 0.4.1 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-malisx2", action="store_true",
                         help="明确构建不含 MaliSX2 的 APK")
+    parser.add_argument("--touch-overlay-migration", type=Path,
+                        help="embed ctrl_touch and touch_strings.tsv to repair the known legacy 20:9 data overlay without reimporting game data")
     args = parser.parse_args()
     if args.game_source and not args.game_run: parser.error("--game-source only makes sense with --game-run")
+    if args.touch_overlay_migration and not args.game_run:
+        parser.error("--touch-overlay-migration requires --game-run")
+    if args.touch_overlay_migration:
+        for name in ("ctrl_touch", "touch_strings.tsv"):
+            if not (args.touch_overlay_migration / name).is_file():
+                parser.error("--touch-overlay-migration must contain " + name)
+        migration_data = args.touch_overlay_migration / "data"
+        migration_archives = sorted(migration_data.glob("*.data")) if migration_data.is_dir() else []
+        if not (migration_data / ".build.config").is_file() or len(migration_archives) != 1:
+            parser.error("--touch-overlay-migration requires data/.build.config and exactly one .data archive")
     if args.game_run and not args.game_source:
         # 没有游戏源码也照样出 APK：宿主与前端完整，**游戏模块由手机端导入的数据包提供**（启动界面本来就要
         # 先导入才能启动）。CI 用它产出可下载的通用 APK；本机带 --game-source 时照旧把游戏代码打进包里。
@@ -293,6 +305,19 @@ def main():
                   ROOT.parent / "ios/Sources/dm_touch_controls.c", "-landroid", "-llog", "-ldl", "-lm", "-o", build / "libdmandroid.so"])
     assets = build / "assets"
     assets.mkdir(exist_ok=True)
+    shutil.rmtree(assets / "touch-layout-migration", ignore_errors=True)
+    if args.touch_overlay_migration:
+        migration = assets / "touch-layout-migration"
+        migration.mkdir()
+        for name in ("ctrl_touch", "touch_strings.tsv"):
+            shutil.copyfile(args.touch_overlay_migration / name, migration / name)
+        migration_data = migration / "data"
+        migration_data.mkdir()
+        for source in [args.touch_overlay_migration / "data" / ".build.config", *migration_archives]:
+            destination = "build.config" if source.name == ".build.config" else source.name
+            shutil.copyfile(source, migration_data / destination)
+        (migration / "archive.name").write_text(migration_archives[0].name + "\n", encoding="ascii")
+        print("Legacy 20:9 Android HUD overlay embedded for on-device migration", flush=True)
     licenses = assets / "licenses"
     licenses.mkdir(exist_ok=True)
     for license_file in (build / "gpu-driver/licenses").glob("*.txt"):
@@ -405,6 +430,18 @@ def main():
     run([TOOLS / "build-tools/apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--key-pass", "pass:android",
          "--out", apk, aligned], env=env)
     run([TOOLS / "build-tools/apksigner", "verify", apk], env=env)
+    if args.touch_overlay_migration:
+        # aapt silently drops dotfiles. Verify the actual APK contract, including
+        # the visible asset name that native restores as data/.build.config.
+        with zipfile.ZipFile(apk) as packaged:
+            for relative in ("ctrl_touch", "touch_strings.tsv", "archive.name",
+                             "data/build.config", "data/" + migration_archives[0].name):
+                name = "assets/touch-layout-migration/" + relative
+                if name not in packaged.namelist():
+                    sys.exit("APK migration asset missing after packaging: " + name)
+            if packaged.read("assets/touch-layout-migration/data/build.config") != \
+                    (args.touch_overlay_migration / "data" / ".build.config").read_bytes():
+                sys.exit("APK migration build config differs from the generated overlay")
     print("APK:", apk)
     if args.install:
         run([TOOLS / "platform-tools/adb", "install", "-r", apk])

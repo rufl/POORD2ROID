@@ -29,7 +29,9 @@ d2r-package.zip
 ├── romfs/                        原始游戏资源
 │   └── data/*.data, *.psv
 ├── romfs_overlay/                可选：界面与配置补丁
-│   └── data/.build.config + *.data
+│   ├── data/.build.config + *.data
+│   ├── ctrl_touch               可选：启用覆盖层中的触屏布局
+│   └── touch_strings.tsv        可选：触屏模式的提示文字
 ├── shaders/                      翻译后的着色器
 │   ├── host-subgroup-size.txt    分组档位，必须与实际 GPU 策略一致
 │   └── <key>.spv / <key>.meta
@@ -50,8 +52,8 @@ d2r-package.zip
 
 `format` 是包格式版本。手机端遇到不认识的版本必须**明确报错并拒绝导入**，不能猜。
 
-`romfs_overlay` 是可选组，旧包仍可导入。`make_package.py` 默认不生成游戏界面 overlay，因此保留原始字体和布局。需要自定义 overlay 时，使用 `build_package.py assemble --romfs-overlay ...` 显式加入。
-旧版 Android 数据包可能包含 1.5× 字体 overlay；重新导入一个不含 `romfs_overlay` 的新包会清除旧 overlay。仅覆盖安装 APK 不会改动已导入的 RomFS。
+`romfs_overlay` 是可选组，旧包仍可导入。触屏版 overlay 必须同时带根目录旁路文件 `ctrl_touch` 与 `touch_strings.tsv`；只打包 `.build.config` 和 `.data` 会让运行时忽略触屏布局，继续使用原版手柄 HUD。`build_package.py assemble --romfs-overlay ...` 会一并收集这两个旁路文件（字体 overlay 可不带）。
+`make_package.py` 默认不生成游戏界面 overlay。旧版 Android 数据包可能包含 1.5× 字体 overlay；重新导入一个不含 `romfs_overlay` 的新包会清除旧 overlay。仅覆盖安装 APK 不会改动已导入的 RomFS。
 
 ## derived.tsv：三张游戏派生表（壳模式）
 

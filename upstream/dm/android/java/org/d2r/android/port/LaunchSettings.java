@@ -19,6 +19,24 @@ import java.nio.charset.StandardCharsets;
 final class LaunchSettings {
     private LaunchSettings() { }
 
+    static boolean is169Resolution(String value) {
+        if (value == null || value.isEmpty()) return false;
+        String[] parts = value.split("x", -1);
+        if (parts.length != 2) return false;
+        try {
+            long width = Long.parseLong(parts[0]), height = Long.parseLong(parts[1]);
+            return width > 0 && height > 0 && width * 9 <= height * 16;
+        } catch (NumberFormatException error) {
+            return false;
+        }
+    }
+
+    // Stored resolution is the docked base; native handheld applies the
+    // existing 0.8 profile. 1600x900 -> 1280x720, 1600x720 -> 1280x576.
+    static String resolutionForAspect(boolean use169) {
+        return use169 ? "1600x900" : "1600x720";
+    }
+
     // 取一个键的值；没有这个文件 / 没有这个键都返回 null。
     // Read one key; returns null when the file or the key is absent.
     static String read(File file, String key) {

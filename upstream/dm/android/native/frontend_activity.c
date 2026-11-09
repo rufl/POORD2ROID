@@ -16,6 +16,8 @@
 #include "performance_hint.h"
 #include "launch_settings.h"
 #include "startup_gate.h"
+#include "touch_overlay_migration.h"
+#include "ui_gesture.h"
 #include <android/native_activity.h>
 #include <android/native_window.h>
 #include <android/window.h>
@@ -40,6 +42,7 @@ typedef struct {
     uint64_t touch_buttons;int32_t touch_lx,touch_ly,touch_rx,touch_ry;
     dm_tc_layout touch_layout;int touch_layout_w,touch_layout_h;
     int ui_touch_id,ui_touch_active,ui_touch_pending,ui_touch_started,ui_touch_tab;
+    int ui_touch_can_scroll,ui_touch_drag;
     unsigned ui_touch_query;float ui_touch_x,ui_touch_y,ui_touch_now_x,ui_touch_now_y;
     int hud_touch_id,hud_touch_hit,hud_touch_active;
     uint64_t hud_touch_button;float hud_touch_x,hud_touch_y;
@@ -229,10 +232,47 @@ static void *progress_watch(void *argument) {
     (*env)->DeleteLocalRef(env,klass);(*a->vm)->DetachCurrentThread(a->vm);return NULL;
 }
 
-static void copy_asset(ANativeActivity *a,const char *directory,const char *name) {
-    AAsset *asset=AAssetManager_open(a->assetManager,name,AASSET_MODE_STREAMING);if(!asset)die("Missing game metadata asset %s",name);
-    char path[1024];snprintf(path,sizeof path,"%s/%s",directory,name);FILE *file=fopen(path,"wb");if(!file)die("Game metadata open %s",path);
-    char buffer[4096];int n;while((n=AAsset_read(asset,buffer,sizeof buffer))>0)if(fwrite(buffer,1,n,file)!=(size_t)n)die("Game metadata write");fclose(file);AAsset_close(asset);
+static void copy_asset_as(ANativeActivity *a,const char *directory,const char *asset_name,const char *output_name) {
+    AAsset *asset=AAssetManager_open(a->assetManager,asset_name,AASSET_MODE_STREAMING);if(!asset)die("Missing game metadata asset %s",asset_name);
+    char path[1024];snprintf(path,sizeof path,"%s/%s",directory,output_name);FILE *file=fopen(path,"wb");if(!file)die("Game metadata open %s",path);
+    char buffer[4096];int n;while((n=AAsset_read(asset,buffer,sizeof buffer))>0)if(fwrite(buffer,1,(size_t)n,file)!=(size_t)n)die("Game metadata write");fclose(file);AAsset_close(asset);
+}
+static void copy_asset(ANativeActivity *a,const char *directory,const char *name) { copy_asset_as(a,directory,name,name); }
+static int migration_asset_exists(ANativeActivity *a,const char *name) {
+    AAsset *asset=AAssetManager_open(a->assetManager,name,AASSET_MODE_STREAMING);if(!asset)return 0;AAsset_close(asset);return 1;
+}
+static int migration_archive_name(ANativeActivity *a,char *name,size_t capacity) {
+    AAsset *asset=AAssetManager_open(a->assetManager,"touch-layout-migration/archive.name",AASSET_MODE_STREAMING);
+    if(!asset)return 0;
+    size_t used=0;int n;
+    while(used+1<capacity&&(n=AAsset_read(asset,name+used,capacity-1-used))>0)used+=(size_t)n;
+    AAsset_close(asset);name[used]=0;name[strcspn(name,"\r\n")]=0;
+    size_t length=strlen(name);
+    return length>5&&length+2<capacity&&!strcmp(name+length-5,".data")&&
+        !strchr(name,'/')&&!strchr(name,'\\')&&strcmp(name,".")&&strcmp(name,"..");
+}
+static void repair_legacy_touch_overlay(ANativeActivity *a,const char *overlay,const char *config) {
+    if(!dm_touch_overlay_is_legacy_install(overlay,config))return;
+    int full=migration_asset_exists(a,"touch-layout-migration/data/build.config");
+    if(!full&&!dm_touch_overlay_needs_repair(overlay,config))return;
+    const char *marker_asset="touch-layout-migration/ctrl_touch",*strings_asset="touch-layout-migration/touch_strings.tsv";
+    char sidecars[1024],layers[2300];int dn=snprintf(sidecars,sizeof sidecars,"%s/touch-layout-migration",a->internalDataPath);
+    if(dn<=0||(size_t)dn>=sizeof sidecars||(mkdir(sidecars,0700)&&errno!=EEXIST)){LOG("[android-overlay-migration] cannot create sidecar directory");return;}
+    if(full){
+        char data[1200],archive[128],asset[1200];
+        int n=snprintf(data,sizeof data,"%s/data",sidecars);
+        if(n<=0||(size_t)n>=sizeof data||(mkdir(data,0700)&&errno!=EEXIST))die("Android HUD migration data directory");
+        copy_asset_as(a,data,"touch-layout-migration/data/build.config",".build.config");
+        if(!migration_archive_name(a,archive,sizeof archive))die("Android HUD migration archive name");
+        n=snprintf(asset,sizeof asset,"touch-layout-migration/data/%s",archive);
+        if(n<=0||(size_t)n>=sizeof asset)die("Android HUD migration archive asset path");
+        copy_asset_as(a,data,asset,archive);
+    }
+    copy_asset_as(a,sidecars,marker_asset,"ctrl_touch");copy_asset_as(a,sidecars,strings_asset,"touch_strings.tsv");
+    int n=snprintf(layers,sizeof layers,"%s:%s",sidecars,overlay);
+    if(n<=0||(size_t)n>=sizeof layers){LOG("[android-overlay-migration] overlay layer path too long");return;}
+    if(setenv("DM_ROMFS_OVERLAY",layers,1)){LOG("[android-overlay-migration] cannot activate sidecar layer");return;}
+    LOG("[android-overlay-migration] repaired legacy touch overlay mode=%s native_HUD=HP_MP_XP_SKILLS; full game package was not reimported",full?"complete-android-overlay":"sidecars-only");
 }
 static void *boot(void *argument) {
     game_app *s=argument;pthread_mutex_lock(&s->lock);
@@ -272,10 +312,11 @@ static void *boot(void *argument) {
         // /storage/emulated) and dlopen from there fails. The bulk assets stay external, where the gigabytes fit.
         snprintf(metadata,sizeof metadata,"%s/d2r-package/game",s->activity->internalDataPath);mkdir(metadata,0700);
         snprintf(path,sizeof path,"%s/d2r-package/romfs",s->activity->externalDataPath);setenv("DM_ROMFS",path,1);
-        int overlay_config_length=snprintf(path,sizeof path,"%s/d2r-package/romfs_overlay/data/.build.config",s->activity->externalDataPath);
-        if(overlay_config_length>0&&(size_t)overlay_config_length<sizeof path&&access(path,R_OK)==0){
-            int overlay_length=snprintf(path,sizeof path,"%s/d2r-package/romfs_overlay",s->activity->externalDataPath);
-            if(overlay_length>0&&(size_t)overlay_length<sizeof path){setenv("DM_ROMFS_OVERLAY",path,1);LOG("[android] imported RomFS overlay enabled: %s",path);}
+        char overlay_config[1200],overlay_root[1200];
+        int overlay_config_length=snprintf(overlay_config,sizeof overlay_config,"%s/d2r-package/romfs_overlay/data/.build.config",s->activity->externalDataPath);
+        if(overlay_config_length>0&&(size_t)overlay_config_length<sizeof overlay_config&&access(overlay_config,R_OK)==0){
+            int overlay_length=snprintf(overlay_root,sizeof overlay_root,"%s/d2r-package/romfs_overlay",s->activity->externalDataPath);
+            if(overlay_length>0&&(size_t)overlay_length<sizeof overlay_root){setenv("DM_ROMFS_OVERLAY",overlay_root,1);repair_legacy_touch_overlay(s->activity,overlay_root,overlay_config);LOG("[android] imported RomFS overlay enabled: %s",getenv("DM_ROMFS_OVERLAY"));}
             else unsetenv("DM_ROMFS_OVERLAY");
         }else{unsetenv("DM_ROMFS_OVERLAY");LOG("[android] no imported RomFS overlay; using original game layouts");}
         snprintf(path,sizeof path,"%s/d2r-package/shaders",s->activity->externalDataPath);setenv("DM_VK_SHADERS",path,1);
@@ -325,7 +366,7 @@ static void *boot(void *argument) {
     // 设置生效后立刻记一次环境，确认 DM_GAME_RES 真的传下去了（否则只会在游戏那边看到"未设"）。
     // Immediately record the environment after the settings apply, to confirm DM_GAME_RES really got through;
     // otherwise the only symptom is "unset" on the game side.
-    LOG("[android] 环境核对 DM_OPMODE=%s DM_GAME_RES=%s DM_DEBUG_OVERLAY=%s",getenv("DM_OPMODE")?getenv("DM_OPMODE"):"(未设)",getenv("DM_GAME_RES")?getenv("DM_GAME_RES"):"(未设)",getenv("DM_DEBUG_OVERLAY")?getenv("DM_DEBUG_OVERLAY"):"(未设)");
+    LOG("[android] 环境核对 DM_OPMODE=%s DM_GAME_RES=%s DM_DEBUG_OVERLAY=%s DM_FONT_LARGE=%s",getenv("DM_OPMODE")?getenv("DM_OPMODE"):"(未设)",getenv("DM_GAME_RES")?getenv("DM_GAME_RES"):"(未设)",getenv("DM_DEBUG_OVERLAY")?getenv("DM_DEBUG_OVERLAY"):"(未设)",getenv("DM_FONT_LARGE")?getenv("DM_FONT_LARGE"):"(未设)");
     setenv("DM_TACT_PREFETCH","0",1);setenv("DM_BOOTPROF","1",1);setenv("DM_DBG","1",1);
     setenv("DM_UIMSG","1",1);setenv("DM_MOVIE","1",1);
     // 音频：真出声是 Android 的缺省；诊断时用 $DM_TEMP/audio_off 标记切成静音接收端。
@@ -495,7 +536,11 @@ static int32_t touch_axis(jint value) {return value>DM_STICK_MAX?DM_STICK_MAX:va
 static void touch_layout_update(game_app *s,int width,int height) {
     if(width<=0||height<=0||(s->touch_layout_w==width&&s->touch_layout_h==height))return;
     dm_tc_set_tall_scale(1);
+    dm_tc_set_hud_bottom(48); // Same design-space lift as DM_ANDROID_HUD=1 in gen_hud_v4.py.
     dm_tc_layout_make(&s->touch_layout,(float)width,(float)height);
+    LOG("[android-touch-geometry] surface=%dx%d HUD_bottom_design=48 belt1=%.1f,%.1f main=%.1f,%.1f",width,height,
+        s->touch_layout.target[DM_TC_BELT1].x,s->touch_layout.target[DM_TC_BELT1].y,
+        s->touch_layout.target[DM_TC_MAIN].x,s->touch_layout.target[DM_TC_MAIN].y);
     s->touch_layout_w=width;s->touch_layout_h=height;
 }
 static int touch_ui_mode(void) {
@@ -531,8 +576,8 @@ static int android_touch_input(game_app *s,AInputEvent *event,int width,int heig
     int cancel=action==AMOTION_EVENT_ACTION_CANCEL;
     if(cancel) {
         int consumed=s->ui_touch_active||s->hud_touch_active;
-        if(s->ui_touch_active)dm_ui_touch(3,0,0);
-        s->ui_touch_active=s->hud_touch_active=0;s->touch_buttons=0;s->touch_rx=s->touch_ry=0;
+        if(s->ui_touch_active){if(s->ui_touch_drag)dm_ui_drag_end();else dm_ui_touch(3,0,0);}
+        s->ui_touch_active=s->hud_touch_active=0;s->ui_touch_can_scroll=0;s->ui_touch_drag=0;s->touch_buttons=0;s->touch_rx=s->touch_ry=0;
         s->tap_a=0;pad_publish(s);return consumed;
     }
     int index=down||up?(int)ix:0;
@@ -545,6 +590,8 @@ static int android_touch_input(game_app *s,AInputEvent *event,int width,int heig
     float x=AMotionEvent_getX(event,index),y=AMotionEvent_getY(event,index);
     float nx=x/width,ny=y/height,game_nx,game_ny;
     dm_ui_screen_to_game(nx,ny,&game_nx,&game_ny);
+    if(down)LOG("[android-touch-map] opmode=%d surface=%dx%d raw=%.1f,%.1f game=%.4f,%.4f ui_mode=%d",
+        dm_opmode(),width,height,x,y,game_nx,game_ny,touch_ui_mode());
     int consumed=0;
     if(s->ui_touch_active) {
         if(id==s->ui_touch_id) {
@@ -557,19 +604,35 @@ static int android_touch_input(game_app *s,AInputEvent *event,int width,int heig
                         dm_ui_touch(3,game_nx,game_ny);s->ui_touch_tab=1;
                         if(up){dm_ui_tab_go();s->ui_touch_tab=0;}
                     } else if(result!=3&&result!=6&&result!=10) {
+                        s->ui_touch_can_scroll=result==0;
                         dm_ui_touch(0,s->ui_touch_x,s->ui_touch_y);
                         s->ui_touch_started=1;
                         if(!up)dm_ui_touch(1,game_nx,game_ny);
                         else {dm_ui_touch(2,game_nx,game_ny);s->ui_touch_started=0;}
                     }
                 }
+            }
+            if(!s->ui_touch_pending&&s->ui_touch_started&&!s->ui_touch_drag&&action==AMOTION_EVENT_ACTION_MOVE) {
+                int in_game=dm_uiscreen_ingame();
+                int kind=dm_android_ui_gesture_kind(game_nx-s->ui_touch_x,game_ny-s->ui_touch_y,0.025f,
+                    s->ui_touch_can_scroll||!in_game,in_game&&s->ui_touch_can_scroll);
+                if(kind&&(in_game||dm_ui_fe_drag_ok())) {
+                    dm_ui_touch(3,0,0);s->ui_touch_started=0;s->ui_touch_drag=kind;
+                    dm_ui_drag_begin(kind,s->ui_touch_x,s->ui_touch_y,kind==2?44.0f/height:0);
+                    LOG("[android-ui-gesture] kind=%s origin=%.4f,%.4f current=%.4f,%.4f",kind==1?"scroll":"slider",
+                        s->ui_touch_x,s->ui_touch_y,game_nx,game_ny);
+                }
+            }
+            if(s->ui_touch_drag) {
+                dm_ui_drag_move(game_nx,game_ny);
+                if(up){dm_ui_drag_end();s->ui_touch_drag=0;}
             } else if(s->ui_touch_started) {
                 dm_ui_touch(up?2:1,game_nx,game_ny);
                 if(up)s->ui_touch_started=0;
             } else if(up&&s->ui_touch_tab) {
                 dm_ui_tab_go();s->ui_touch_tab=0;
             }
-            if(up){s->ui_touch_active=0;s->ui_touch_pending=0;s->ui_touch_started=0;s->ui_touch_tab=0;}
+            if(up){s->ui_touch_active=0;s->ui_touch_pending=0;s->ui_touch_started=0;s->ui_touch_tab=0;s->ui_touch_can_scroll=0;s->ui_touch_drag=0;}
             consumed=1;
         }
     } else if(s->hud_touch_active) {
@@ -595,9 +658,9 @@ static int android_touch_input(game_app *s,AInputEvent *event,int width,int heig
             consumed=1;pad_publish(s);
         }
     } else if(down&&touch_ui_mode()) {
-        s->ui_touch_id=id;s->ui_touch_active=1;
+        s->ui_touch_id=id;s->ui_touch_active=1;s->ui_touch_can_scroll=0;s->ui_touch_drag=0;
+        s->ui_touch_x=game_nx;s->ui_touch_y=game_ny;
         if(dm_uiscreen_ingame()) {
-            s->ui_touch_x=game_nx;s->ui_touch_y=game_ny;
             s->ui_touch_query=dm_ui_item_query(game_nx,game_ny);
             s->ui_touch_pending=1;
         } else dm_ui_touch(0,game_nx,game_ny),s->ui_touch_started=1;
@@ -640,6 +703,9 @@ __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivit
 // takes effect on the next present.
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setPresentHz(JNIEnv *env,jclass klass,jint hz) {
     (void)env;(void)klass;void dm_present_hz_set(int);dm_present_hz_set((int)hz);
+}
+__attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setFontLarge(JNIEnv *env,jclass klass,jboolean large) {
+    (void)env;(void)klass;dm_ui_font_large_request(large?1:0);
 }
 extern void mtl_buffer_cache_trim(void);
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_trimGpuBuffers(JNIEnv *env,jclass klass) {

@@ -56,7 +56,11 @@ python dm/android/tools/build.py --game-run   --game-source ~/dm-work/build/andr
 
 输出 `dm/android/build/D2R-Android-port.apk`，包名 `org.d2r.android.port`。真实游戏APK包含本机派生的游戏模块，不随源码发布。
 
-启动分辨率默认值为 1280×576（20:9）；旧配置中缺失或为空的分辨率也会迁移到此值，避免游戏回退到 800×600。菜单和读取画面保留游戏原生 16:9 输出。局内 UI 全局尺寸、HUD 布局、触摸映射、Vulkan viewport 与 scissor 均保持完整宽屏出图尺寸。旧 Android 路径将 UI 全局尺寸缩为居中 16:9 画布，并单独裁剪 viewport/scissor；这与 Switch HUD 布局的整屏锚点冲突，会裁掉游戏面板和 HUD，现已移除。11T 的 20:9 档位应使用完整宽屏目标，例如掌机缩放后的 1920×864；其 viewport/scissor 覆盖全部源像素。主机几何测试验证该映射；实际设备渲染仍需真机确认。
+默认分辨率为 1280×576（20:9）；旧配置中缺失或为空的分辨率也会迁移到此值。小米 11T 屏幕为 2400×1080（20:9）。游戏中保持纵向比例并使用完整 20:9 渲染目标，以横向显示更多世界内容；Android Vulkan 呈现器以有效的 NVN `WindowSetCrop` 为权威活动画面，逻辑尺寸仅在裁剪缺失或无效时作为后备；再将完整活动画面按比例适配到屏幕，不拉伸。主菜单与读取画面保持原生 16:9 比例居中显示（2400×1080 屏幕上，1920×1080 画面两侧各留 240 像素）；有效的界面页裁剪仍会保留。掌机档降低渲染像素数时仍须保持 20:9，例如 1920×864。
+截至目前找到的 [Switch 截图集](https://www.useapotion.com/2021/09/diablo-ii-resurrected-nintendo-switch-review/)是 16:9 截图，未标注掌机或底座模式。[Digital Foundry 的 Switch 技术分析摘要](https://www.nintenderos.com/2021/10/someten-a-test-el-apartado-tecnico-de-diablo-ii-resurrected-en-nintendo-switch/)报告底座模式约 900p、掌机模式约 720p（部分场景会降低）；这是像素分辨率，不代表超宽界面布局。因此截图可用于参考 UI 排布，不能作为两种模式各自几何的证据。
+Android 掌机布局档现继承 `ConsoleHD`，不再继承低分辨率 `ConsoleLV`；原有基档导致掌机分辨率下的面板几何不同。当前大字体覆盖层在既有 1.5 倍字号基础上再增大 15%（即源字号的 1.725 倍），并一并缩放数字型 `pointSize` 覆盖值。生成的底部 HUD 上移 48 个设计像素，不缩放图像或触摸框，以避开底部系统手势区域。这些修改属于游戏数据覆盖层；必须重新生成并导入数据覆盖层，单独更新通用 APK 不会更新已导入的游戏数据。主机几何测试与覆盖层生成已通过，但构建成功不等于已证明 11T 上所有面板/HUD 均可见且未裁切；仍需目标设备或匹配配置的渲染截图确认。
+
+Android 生成 HUD 时必须设 `DM_ANDROID_HUD=1`。Android 没有 iOS 的 UIKit `drawV4` 层，因此这个变体保留游戏原生的 HP/MP 数值、经验条与技能控件，不再把它们移出屏幕或藏到底图下。APK 0.6.85 对已知的旧 20:9 overlay 使用完整小 overlay 迁移（7,009,616 字节），无需重导入游戏数据。HUD 上移 48 个设计像素时，腰带、难度与技能触摸区同步上移，避免显示位置与命中位置分离；`t_touch_controls` 的 47/47 个用例、1580 项检查通过。构建时 AAPT 会丢弃点开头文件，所以 APK 内名为 `build.config`，native 在私有目录恢复为 `.build.config`；构建脚本核对最终 APK 内的全部迁移文件。
 
 
 ```bash
@@ -72,7 +76,7 @@ RomFS和着色器仅首次或资源版本变化时部署；更新APK保留应用
 `make_package.py` 现在保留游戏原始的 Console/Handheld 字体档，不再默认把游戏字体放大 1.5 倍。重新导入新数据包会移除旧包中的 1.5× 字体 overlay；只更新 APK 不会改动已导入资源。
 若要覆盖更新已有安装，必须沿用相同签名密钥；默认使用 `$DM_ANDROID_TOOLS/debug.keystore`。密钥不同时 Android 会拒绝更新，可用 `--keystore PATH` 指定已有密钥。
 
-启动器提供 System Vulkan、JimVulkan PanVK r9、MaliSX2 0.4.0（Mali kbase，`/dev/mali0`）以及 Qualcomm KGSL（`/dev/kgsl-3d0`）专用的内置 Turnip。设备只显示硬件及 APK 资源都匹配的选项；Xiaomi 11T 预期显示 System、MaliSX2 和 PanVK。MaliSX2 固定版本并校验压缩包与驱动库 SHA-256，APK 内含 MIT 许可证和声明。上游将 Mali-G77 列为支持型号，但测试设备并非 11T；D2R 游戏、Android 呈现和 11T 性能尚未验证。上游说明该版本尚未实现 MSAA。所有自定义驱动均严格启动，失败不会静默回退；需要恢复时请明确选择 System。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
+启动器提供 System Vulkan、JimVulkan PanVK r10、MaliSX2 0.4.1（Mali kbase，`/dev/mali0`）以及 Qualcomm KGSL（`/dev/kgsl-3d0`）专用的内置 Turnip。设备只显示硬件及 APK 资源都匹配的选项；Xiaomi 11T 预期显示 System、MaliSX2 和 PanVK。MaliSX2 固定版本并校验压缩包与驱动库 SHA-256，APK 内含 MIT 许可证和声明。上游将 Mali-G77 列为支持型号，但测试设备并非 11T；D2R 游戏、Android 呈现和 11T 性能尚未验证。上游说明该版本尚未实现 MSAA。所有自定义驱动均严格启动，失败不会静默回退；需要恢复时请明确选择 System。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
 
 Android 模拟外部存储上的 xattr 查询可能返回 `EOPNOTSUPP`。此时 RomFS 路径解析会直接使用物理文件名作为客体名（包括 `.build.config` 等点文件）；存档仍位于应用私有的 `files/save/`。
 Android APK 会在每次游戏读取设置前强制文字和语音为英文（`Language` / `VoiceLanguage` = `0`），覆盖旧的中文设置和 `lang_en` 选择，但保留其他设置与存档数据。此 Android 版本不提供游戏内语言切换。

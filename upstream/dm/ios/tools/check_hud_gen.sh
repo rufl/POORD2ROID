@@ -16,4 +16,22 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 python3 "$I/tools/native_art/generate.py" "$R" > "$T.art.log" 2>&1 || { echo "HUDGEN 红：技能图集生成不通（底栏要用它）"; tail -3 "$T.art.log"; exit 1; }   # 底栏的技能图标取自技能图集（Sources/TouchArt，git 忽略）；干净的树里没有，先生成 | The bottom bar's skill icons come from the skill atlas (Sources/TouchArt, git-ignored); a clean tree has none, so generate it first
 python3 "$I/tools/gen_hud_v4.py" "$R" "$T" > "$T.log" 2>&1 || { echo "HUDGEN 红：gen_hud_v4.py 跑不通"; tail -3 "$T.log"; exit 1; }
 n=$(find "$T" -type f | wc -l | tr -d ' '); [ "$n" -ge 79 ] || { echo "HUDGEN 红：底部 UI v4 只生成了 $n 个文件（应 79）"; exit 1; }
+mkdir "$T/android"
+DM_ANDROID_HUD=1 python3 "$I/tools/gen_hud_v4.py" "$R" "$T/android" > "$T.android.log" 2>&1 || { echo "HUDGEN 红：Android 原生 HUD 生成失败"; tail -3 "$T.android.log"; exit 1; }
+python3 - "$T/hud.json" "$T/android/hud.json" <<'PY'
+import json, sys
+ios = json.load(open(sys.argv[1], encoding='utf-8'))
+android = json.load(open(sys.argv[2], encoding='utf-8'))
+def widgets(layout):
+    return {child['name']: child for child in layout['children']}
+i, a = widgets(ios), widgets(android)
+for orb in ('HealthBall', 'ManaBall'):
+    value = next(c for c in a[orb]['children'] if c['name'] == 'ValueDisplay')
+    assert value['fields']['rect']['x'] != -6000, orb + ' value hidden on Android'
+assert a['ExpBar']['fields']['rect']['x'] != -6000, 'XP hidden on Android'
+for name in ('SkillButton1', 'SkillButton2', 'SkillButton3', 'SkillButton4', 'SkillButton5'):
+    assert a[name]['fields']['rect'] != a['SkillButton6']['fields']['rect'], name + ' hidden under Android overlay'
+assert i['ExpBar']['fields']['rect']['x'] == -6000, 'iOS drawV4 split regressed'
+print('HUDGEN OK: Android keeps native HP/MP/XP/skills; iOS replacement layer remains intact')
+PY
 echo "HUDGEN OK：生成物没有入库；底部 UI v4 从游戏文件生成 $n 个文件$(grep -q '^没找到 PC' "$T.log" && echo '（Switch 素材放大版）')"

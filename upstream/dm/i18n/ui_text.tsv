@@ -370,6 +370,9 @@ dmAndroidLaunchImportTooBig	数据包过大或条目过多，已拒绝	Package t
 dmAndroidLaunchImportCancelled	已取消导入	Import cancelled	Android 启动界面
 dmAndroidLaunchCancel	正在取消…	Cancelling…	Android 启动界面
 dmAndroidLaunchResolution	分辨率	Resolution	Android 启动界面
+dmAndroidLaunchAspect	游戏画面比例	Gameplay aspect	Android 启动界面
+dmAndroidLaunchAspectWide	扩展 20:9	Extended 20:9	Android 启动界面
+dmAndroidLaunchAspect169	标准 16:9	Standard 16:9	Android 启动界面
 dmAndroidLaunchDriver	驱动	Driver	Android 启动界面
 dmAndroidLaunchDriverSystem	系统驱动	System Vulkan	Android 启动界面
 dmAndroidLaunchDriverPanvk	PanVK（实验性 Mali 驱动）	PanVK (experimental Mali driver)	Android 启动界面驱动选择
@@ -384,6 +387,9 @@ dmAndroidMenuOverlay	帧率显示	Frame rate display	Android 游戏内菜单
 dmAndroidMenuControls	虚拟摇杆	On-screen controls	Android 游戏内菜单
 dmAndroidMenuQuality	画质	Quality	Android 游戏内菜单
 dmAndroidMenuFrameRate	帧率	Frame rate	Android 游戏内菜单
+dmAndroidMenuFont	字体大小	Font size	Android 游戏内菜单
+dmAndroidMenuFontNormal	正常	Normal	Android 游戏内菜单
+dmAndroidMenuFontLarge	放大	Large	Android 游戏内菜单
 dmAndroidMenuFpsUnit	帧	fps	Android 游戏内菜单
 dmAndroidMenuFpsFollow	跟随屏幕	Follow screen	Android 游戏内菜单
 dmAndroidMenuExit	退出游戏	Exit game	Android 游戏内菜单

@@ -44,6 +44,7 @@ static void reset_environment(void) {
     assert(!setenv("DM_HID_RECEIPT_LOG", "old-receipt-path", 1));
     assert(!setenv("DM_DEBUG_OVERLAY", "old-overlay-mode", 1));
     assert(!setenv("DM_GAME_RES", "old-resolution", 1));
+    assert(!setenv("DM_FONT_LARGE", "old-font-level", 1));
 }
 
 static void write_bytes(const void *text, size_t length) {
@@ -54,7 +55,7 @@ static void write_bytes(const void *text, size_t length) {
 static void write_config(const char *text) { write_bytes(text, strlen(text)); }
 
 static dm_android_launch_settings apply_ok(const char *directory) {
-    dm_android_launch_settings result = {-99, -99, -99, -99, -99, -99, -99};
+    dm_android_launch_settings result = {-99, -99, -99, -99, -99, -99, -99, -99};
     char error[512] = "stale error";
     assert(dm_android_launch_settings_apply(directory, &result, error, sizeof error));
     assert(!error[0]);
@@ -64,11 +65,12 @@ static dm_android_launch_settings apply_ok(const char *directory) {
 static void expect_bad(const char *text, const char *message) {
     reset_environment();
     write_config(text);
-    dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23};
+    dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23, 24};
     char error[512];
     assert(!dm_android_launch_settings_apply(temporary, &result, error, sizeof error));
     assert(strstr(error, message));
-    assert(result.present == 17 && result.operation_mode == 18 && result.input_receipts == 19 && result.debug_overlay == 20 && result.resolution_width == 21 && result.resolution_height == 22 && result.present_hz == 23);
+    assert(result.present == 17 && result.operation_mode == 18 && result.input_receipts == 19 && result.debug_overlay == 20 && result.resolution_width == 21 && result.resolution_height == 22 && result.present_hz == 23 && result.font_large == 24);
+    expect_env("DM_FONT_LARGE", "old-font-level");
     expect_env("DM_OPMODE", "old-operation-mode");
     expect_env("DM_HID_RECEIPT_LOG", "old-receipt-path");
     expect_env("DM_DEBUG_OVERLAY", "old-overlay-mode");
@@ -109,6 +111,16 @@ static void valid_settings(void) {
     result = apply_ok(temporary);
     assert(result.operation_mode == 1 && result.input_receipts == 0);
     expect_env("DM_OPMODE", "1"); expect_env("DM_HID_RECEIPT_LOG", NULL);
+    tests++;
+
+    reset_environment(); write_config("font_large=1\n");
+    result = apply_ok(temporary);
+    assert(result.font_large == 1);
+    expect_env("DM_FONT_LARGE", "1");
+    write_config("font_large=0\n");
+    result = apply_ok(temporary);
+    assert(result.font_large == 0);
+    expect_env("DM_FONT_LARGE", "0");
     tests++;
 
     reset_environment(); write_config("operation_mode=handheld\n");
@@ -252,6 +264,8 @@ static void malformed_settings(void) {
     expect_bad("operation_mode=0\n", "operation_mode must be handheld or console");
     expect_bad("input_receipts=1\noperation_mode=Handheld\n", "operation_mode must be handheld or console");
     expect_bad("operation_mode=console\ninput_receipts=true\n", "input_receipts must be 0 or 1");
+    expect_bad("font_large=2\n", "font_large must be 0 or 1");
+    expect_bad("operation_mode=console\nfont_large=\n", "font_large must be 0 or 1");
     expect_bad("operation_mode=console\ninput_receipts=2\n", "input_receipts must be 0 or 1");
     expect_bad("operation_mode=console\ninput_receipts=\n", "input_receipts must be 0 or 1");
     expect_bad("operation_mode=handheld\ninput_receipts\n", "line 2 requires key=value");
@@ -295,7 +309,7 @@ static void size_limits(void) {
     reset_environment();
     const char nul_content[] = "operation_mode=handheld\n\0input_receipts=1\n";
     write_bytes(nul_content, sizeof nul_content - 1);
-    result = (dm_android_launch_settings){17, 18, 19, 20, 21, 22, 23}; char error[512];
+    result = (dm_android_launch_settings){17, 18, 19, 20, 21, 22, 23, 24}; char error[512];
     assert(!dm_android_launch_settings_apply(temporary, &result, error, sizeof error));
     assert(strstr(error, "NUL byte") && result.present == 17 && result.operation_mode == 18 && result.input_receipts == 19
            && result.debug_overlay == 20 && result.resolution_width == 21 && result.resolution_height == 22 && result.present_hz == 23);
@@ -308,7 +322,7 @@ static void invalid_paths(void) {
     char error[512];
     reset_environment();
     for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
-        dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23};
+        dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23, 24};
         assert(!dm_android_launch_settings_apply(paths[i], &result, error, sizeof error));
         assert(strstr(error, "absolute application temp directory") && result.present == 17 && result.operation_mode == 18
                && result.input_receipts == 19 && result.debug_overlay == 20 && result.resolution_width == 21
@@ -354,7 +368,7 @@ static void environment_failures(void) {
             // 精确让第二项环境写失败；旧值存在和不存在都必须恢复，result 不发布。
             // Fail precisely the second environment write; restore both present and absent old values, and do not publish result.
             environment_writes = 0; fail_write_mask = 1u << 2;
-            dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23};
+            dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23, 24};
             assert(!dm_android_launch_settings_apply(temporary, &result, error, sizeof error));
             fail_write_mask = 0;
             assert(strstr(error, "previous environment restored"));

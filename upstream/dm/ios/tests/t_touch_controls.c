@@ -541,7 +541,27 @@ static void belt_single_double(void) {
         dm_tc_tick(&s, t + 1); CHECK(s.belt_request == 0);
     }
 }
+static void hud_bottom_offset(void) {
+    dm_tc_layout base, lifted;
+    dm_tc_layout_make(&base, 956, 440);
+    dm_tc_set_hud_bottom(48);
+    dm_tc_layout_make(&lifted, 956, 440);
+    dm_tc_set_hud_bottom(0);
+    float dy = 48.0f * 440.0f / 1320.0f;
+    for (int i = DM_TC_MAIN; i <= DM_TC_MENU; ++i) {
+        NEAR(base.target[i].y - lifted.target[i].y, dy, 0.001);
+        NEAR(base.target[i].x, lifted.target[i].x, 0.001);
+        CHECK(dm_tc_hit(&lifted, lifted.target[i].x, lifted.target[i].y) == i);
+    }
+    NEAR(base.diff.y - lifted.diff.y, dy, 0.001);
+    NEAR(base.swap.y - lifted.swap.y, dy, 0.001);
+    NEAR(base.target[DM_TC_MAP].y, lifted.target[DM_TC_MAP].y, 0.001);
+    NEAR(base.joy_y, lifted.joy_y, 0.001);
+    dm_tc_layout_make(&lifted, 956, 440);
+    NEAR(base.target[DM_TC_BELT1].y, lifted.target[DM_TC_BELT1].y, 0.001);
+}
 int main(void) {
+    RUN(hud_bottom_offset);
     RUN(layout_667); RUN(layout_812); RUN(layout_956); RUN(layout_1024); RUN(layout_ipad169); RUN(layout_pixels); RUN(small_layout); RUN(difficulty_picker);
     RUN(hit_edges); RUN(key_hold_and_ownership); RUN(two_fingers_same_key); RUN(joystick_deadzone);
     RUN(joystick_axes); RUN(joystick_plus_skills); RUN(no_auto_handoff); RUN(background_no_key);

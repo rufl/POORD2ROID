@@ -41,6 +41,8 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -70,8 +72,9 @@ public final class LauncherActivity extends Activity {
     private static final int WARNING = 0xffd08a78;
 
     private Switch overlaySwitch;
-    private TextView profileItem, resolutionItem, driverItem, importItem, statusView, startItem;
+    private TextView profileItem, resolutionItem, aspectItem, driverItem, importItem, statusView, startItem;
     private boolean handheld;
+    private boolean aspect169;
     private int resolutionIndex;
     private String customResolution = "";   // 预设之外的手写分辨率（-1 档时用）| a hand-written resolution outside the presets
     private int driverIndex;
@@ -252,6 +255,11 @@ public final class LauncherActivity extends Activity {
         return text("dmAndroidLaunchResolution") + "：" + parts[0] + "×" + parts[1];
     }
 
+    private String aspectLabel() {
+        return text("dmAndroidLaunchAspect") + "：" +
+            text(aspect169 ? "dmAndroidLaunchAspect169" : "dmAndroidLaunchAspectWide");
+    }
+
     private boolean turnipBundled() {
         try (InputStream stream = getAssets().open(TURNIP_ASSET)) {
             return stream != null;
@@ -333,6 +341,28 @@ public final class LauncherActivity extends Activity {
         }
         return new String(bytes.toByteArray(), StandardCharsets.UTF_8).trim();
     }
+    private String fileSha256(File file) throws IOException {
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException error) {
+            throw new IOException("SHA-256 unavailable", error);
+        }
+        try (InputStream input = new FileInputStream(file)) {
+            byte[] buffer = new byte[262144];
+            int count;
+            while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count);
+        }
+        byte[] hash = digest.digest();
+        char[] digits = "0123456789abcdef".toCharArray();
+        char[] text = new char[hash.length * 2];
+        for (int i = 0; i < hash.length; i++) {
+            int value = hash[i] & 0xff;
+            text[i * 2] = digits[value >>> 4];
+            text[i * 2 + 1] = digits[value & 15];
+        }
+        return new String(text);
+    }
     private String copyDriverAsset(String asset, File target) {
         File directory = target.getParentFile();
         if (!directory.isDirectory() && !directory.mkdirs()) return "cannot create driver directory";
@@ -358,16 +388,20 @@ public final class LauncherActivity extends Activity {
                     installedHash = readSmallText(previous);
                 } catch (IOException ignored) { }
             }
-            if (target.isFile() && target.length() == expectedSize && expectedHash.equals(installedHash)) return null;
+            if (target.isFile() && target.length() == expectedSize && expectedHash.equals(installedHash)) {
+                if (expectedHash.equals(fileSha256(target))) return null;
+                Log.e("D2RAndroid", "[driver] installed library hash mismatch; copying bundled asset again: "
+                        + target.getName());
+            }
             try (FileOutputStream output = new FileOutputStream(temporary, false)) {
                 byte[] buffer = new byte[262144];
                 int count;
                 while ((count = source.read(buffer)) > 0) output.write(buffer, 0, count);
                 output.getFD().sync();
             }
-            if (temporary.length() != expectedSize) {
+            if (temporary.length() != expectedSize || !expectedHash.equals(fileSha256(temporary))) {
                 temporary.delete();
-                return "bundled driver copy is incomplete";
+                return "bundled driver copy failed size or SHA-256 verification";
             }
             if (target.exists() && !target.delete()) return "cannot replace old driver library";
             if (!temporary.renameTo(target)) return "cannot activate copied driver library";
@@ -469,6 +503,7 @@ public final class LauncherActivity extends Activity {
     private void applyLabels() {
         if (profileItem != null) profileItem.setText(profileLabel());
         if (resolutionItem != null) resolutionItem.setText(resolutionLabel());
+        if (aspectItem != null) aspectItem.setText(aspectLabel());
         if (driverItem != null) driverItem.setText(driverLabel());
         if (importItem != null) importItem.setText(importLabel());
         if (startItem != null) updateStartState();
@@ -496,6 +531,8 @@ public final class LauncherActivity extends Activity {
             if (found >= 0) resolutionIndex = found;
             else if (!preset.isEmpty()) { resolutionIndex = -1; customResolution = preset; }
         }
+        String selectedResolution = resolutionIndex < 0 ? customResolution : RESOLUTION_PRESETS[resolutionIndex];
+        aspect169 = LaunchSettings.is169Resolution(selectedResolution);
         // Driver choices saved by older APKs remain selected only when that backend exists on this GPU.
         // A stale Turnip selection on Mali resets to stock; an available PanVK selection is retained.
         String driver = LaunchSettings.read(stateFile(), "driver");
@@ -571,6 +608,21 @@ public final class LauncherActivity extends Activity {
             0, dp(46), 1f);
         choices.addView(resolutionItem, resolutionParams);
         content.addView(choices);
+        addGap(content, 6);
+
+        aspectItem = buttonItem(aspectLabel(), PARCHMENT, 0x55413a32,
+                                0x667c6d59, 40, 12, false);
+        aspectItem.setOnClickListener(v -> {
+            aspect169 = !aspect169;
+            String wanted = LaunchSettings.resolutionForAspect(aspect169);
+            for (int i = 0; i < RESOLUTION_PRESETS.length; i++)
+                if (RESOLUTION_PRESETS[i].equals(wanted)) resolutionIndex = i;
+            Log.i("D2RAndroid", "[aspect] launcher selected=" + (aspect169 ? "16:9" : "20:9")
+                    + " resolution=" + wanted);
+            applyLabels();
+        });
+        content.addView(aspectItem, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
         addGap(content, 6);
 
         LinearLayout options = new LinearLayout(this);
@@ -893,7 +945,8 @@ public final class LauncherActivity extends Activity {
             setStatus(String.format(text("dmAndroidLaunchDriverFailed"), driverProblem), WARNING);
             return;
         }
-        Log.i("D2RAndroid", "[driver] launch configuration prepared requested=" + requestedDriver);
+        Log.i("D2RAndroid", "[driver] launch configuration prepared requested=" + requestedDriver
+                + " strict_custom=" + !requestedDriver.equals("system"));
         setStatus("", PARCHMENT);
         StringBuilder content = new StringBuilder();
         content.append("# 由启动界面写入 | written by the launcher\n");

@@ -69,12 +69,12 @@ python3 dm/android/tools/ci_checks.py          # 可选：跑与仓库 CI 相同
 
 - **上游**：[jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)（基线 `2eb5758771f110cd53082b999d88d242766610da`）。保留其 [MIT 许可](LICENSE) 及第三方许可声明。
 - **优化参考**：Eden（Switch 模拟器，参考其渲染与超分做法；其着色器翻译是 GPL-3.0，**不并入**本 MIT 项目）与 LASRecomp。
-- **随包分发的图形驱动**：Turnip（Qualcomm KGSL）、JimVulkan PanVK r9 和 [MaliSX2 0.4.0](https://github.com/bmdhacks/malisx2/releases/tag/v0.4.0)（Mali kbase），以及手机自带的 System Vulkan。MaliSX2 使用固定版本并校验压缩包和驱动库 SHA-256，附带 MIT 许可证；它是实验性驱动，上游仅报告在其他设备测试 Mali-G77，尚无 Xiaomi 11T 或 D2R 实战验证，且未实现 MSAA。
+- **随包分发的图形驱动**：Turnip（Qualcomm KGSL）、JimVulkan PanVK r10 和 [MaliSX2 0.4.1](https://github.com/bmdhacks/malisx2/releases/tag/v0.4.1)（Mali kbase），以及手机自带的 System Vulkan。MaliSX2 使用固定版本并校验压缩包和驱动库 SHA-256，附带 MIT 许可证；它是实验性驱动，上游仅报告在其他设备测试 Mali-G77，尚无 Xiaomi 11T 或 D2R 实战验证，且未实现 MSAA。
 - **构建依赖**：Android NDK r28c、JDK 17、Android SDK build-tools / platform 35（`bootstrap.py` 自动安装的版本为准）。
 - **打包游戏数据另需**（只在玩家电脑上）：Python venv（`lz4` / `capstone` 等）、`hactool`、.NET 10 SDK；技能里的前置条件表逐项列出了它们。
 
 **本仓库不包含**游戏程序、RomFS、密钥、存档、翻译后的游戏着色器或 APK。真实 APK 里的游戏模块与数据包都由玩家用**自己的**文件在本机生成，不随仓库或 Release 分发。
 
-APK 可按设备选择 System Vulkan、Turnip、PanVK 或 MaliSX2；MaliSX2 默认随包，使用固定 v0.4.0 并校验 ZIP 与库的 SHA-256，附带 MIT 许可和声明。它仍是实验性驱动，D2R/11T 尚未验证，上游说明尚未实现 MSAA。可用 `--no-malisx2` 构建不含该驱动的 APK。详见[驱动说明](docs/ANDROID_GPU_DRIVER.zh-CN.md)。
+APK 可按设备选择 System Vulkan、Turnip、PanVK 或 MaliSX2；MaliSX2 默认随包，使用固定 v0.4.1 并校验 ZIP 与库的 SHA-256，附带 MIT 许可和声明。它仍是实验性驱动，D2R/11T 尚未验证，上游说明尚未实现 MSAA。可用 `--no-malisx2` 构建不含该驱动的 APK。详见[驱动说明](docs/ANDROID_GPU_DRIVER.zh-CN.md)。
 
 CI（GitHub Actions）构建上面那个 APK 与套件，见[构建说明](docs/ANDROID_BUILD.zh-CN.md#自动流水线github-actions)。

@@ -69,14 +69,28 @@ def collect_romfs(directory):
 
 
 def collect_romfs_overlay(directory):
-    """Accept only the generated overlay index and its single replacement archive."""
+    """Collect one overlay archive and its optional touch-layout sidecars."""
     require_directory(directory, "romfs overlay")
     data = directory / "data"
     config = data / ".build.config"
     archives = sorted(path for path in data.glob("*.data") if path.is_file() and not path.is_symlink())
     if not config.is_file() or config.is_symlink() or len(archives) != 1:
         raise PackageError(f"romfs overlay must contain a generated data/.build.config and one new .data archive: {directory}")
-    return [config, *archives]
+
+    # These files live beside data/, not inside it. The native pad-mode switch
+    # reads ctrl_touch to enable the generated touch layouts and touch_strings.tsv
+    # for translated control prompts. Omitting them silently leaves the game's
+    # controller HUD active even though the replacement layouts are imported.
+    sidecars = []
+    for name in ("ctrl_touch", "touch_strings.tsv"):
+        path = directory / name
+        if path.exists():
+            if not path.is_file() or path.is_symlink():
+                raise PackageError(f"romfs overlay sidecar must be a regular file: {path}")
+            sidecars.append(path)
+    if sidecars and len(sidecars) != 2:
+        raise PackageError(f"touch overlay must contain both ctrl_touch and touch_strings.tsv: {directory}")
+    return [config, *archives, *sidecars]
 
 
 

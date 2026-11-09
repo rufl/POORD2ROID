@@ -2790,8 +2790,30 @@ static void rs_pump(void) {   // 取手柄处（游戏主线程）每次调 | ca
 // 按键脚本的「发界面消息」步（hle_hid.c MSG:…）：任意线程登记，取手柄处（游戏主线程）发出。单槽，脚本一步一条
 // The key script's "send UI message" step (hle_hid.c MSG:...): registered from any thread, sent where the controller is fetched (game main thread). Single slot, one message per script step
 static char g_sendq[96]; static _Atomic int g_sendq_on;
+static _Atomic int g_font_want = -1, g_font_sent = -1;
+void dm_ui_font_large_request(int large) {
+    atomic_store(&g_font_want, large != 0);
+    LOG("[font] native LowVisionMode request=%s", large ? "large" : "normal");
+}
+static void font_request_pump(void) {
+    static int boot_read;
+    int want = atomic_load(&g_font_want);
+    if (!boot_read) {
+        boot_read = 1;
+        const char *e = getenv("DM_FONT_LARGE");
+        if (want < 0 && e && (!strcmp(e, "0") || !strcmp(e, "1"))) want = *e - '0';
+        if (want >= 0) atomic_store(&g_font_want, want);
+    }
+    if (want < 0 || want == atomic_load(&g_font_sent)) return;
+    module_t *m = main_module(); uint64_t root = 0;
+    if (!m) return; memcpy(&root, m->base + 0x2f05458, 8); if (!root) return;
+    fe_send("OptionsPanelMessage", "SetLowVisionMode", "");
+    atomic_store(&g_font_sent, want);
+    LOG("[font] LowVisionMode %s request delivered to UI root; visual confirmation requires a frame", want ? "large" : "normal");
+}
 void dm_ui_send_queue(const char *spec) { strlcpy(g_sendq, spec, sizeof g_sendq); atomic_store(&g_sendq_on, 1); }
 void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几帧 | called where the controller is fetched; actions are spaced a few frames apart
+    font_request_pump();
     if (atomic_exchange(&g_sendq_on, 0)) { char b[96], *c1, *c2; strlcpy(b, g_sendq, sizeof b); c1 = strchr(b, ':'); if (c1) { *c1++ = 0; c2 = strchr(c1, ':'); if (c2) *c2++ = 0; fe_send(b, c1, c2 ? c2 : ""); } }
     // 诊断：DM_DBG_FE_SEND="帧:类别:动作:参数;…"（帧号从 DM_UI_TAPS_AT 命中起算）到帧直接往界面根控件发一条界面消息，探「某条消息此刻收不收」用
     // Diagnostics: DM_DBG_FE_SEND="frame:category:action:argument;..." (frame numbers count from the DM_UI_TAPS_AT hit) sends a UI message directly to the UI root widget at the frame, to probe "whether a given message is accepted right now"

@@ -23,18 +23,25 @@ def build(romfs, output):
     with tempfile.TemporaryDirectory(prefix="d2r-android-font-") as temporary:
         replacements = touch_layout.build_profile(str(romfs), temporary)
         expected_profiles = {
-            "profile_consolehd.json": ('"XMediumFontSize": 45', '"MediumFontSize": 42', '"SmallFontSize": 39'),
-            "profile_handheldhd.json": ('"XMediumLargeFontSize": 54', '"MediumLargeFontSize": 54', '"XMediumFontSize": 51'),
+            "profile_consolehd.json": ('"XMediumFontSize": 52', '"MediumFontSize": 48', '"SmallFontSize": 45'),
+            "profile_handheldhd.json": (
+                '"basedOn": "ConsoleHD"',
+                '"XMediumLargeFontSize": 62',
+                '"MediumLargeFontSize": 62',
+                '"XMediumFontSize": 59',
+                '"StyleSettingsNumericGameCreator"',
+                '"pointSize": 59',
+            ),
         }
         for name, expected in expected_profiles.items():
             profile = (Path(temporary) / name).read_text(encoding="utf-8")
             if not all(value in profile for value in expected):
-                raise SystemExit(f"1.5x source-relative font profile values missing from {name}")
+                raise SystemExit(f"1.725x source-relative font profile values missing from {name}")
         layout_path, layout = touch_layout.read_layout(romfs, "gameplayoptionspanelhd.json")
-        patch = touch_layout._row_height(touch_layout._drop_rows("LowVisionMode"), 270)
+        patch = touch_layout._row_height(touch_layout._drop_rows("LowVisionMode"), 311)
         layout, changes = patch(layout)
-        if changes == 0 or '"rowHeight": 270' not in layout or '"name": "Row LowVisionMode"' in layout:
-            raise SystemExit("gameplay options layout did not apply the 1.5x font settings fix")
+        if changes == 0 or '"rowHeight": 311' not in layout or '"name": "Row LowVisionMode"' in layout:
+            raise SystemExit("gameplay options layout did not apply the 1.725x font settings fix")
         settings = Path(temporary) / "gameplayoptions-large-font.json"
         settings.write_text(layout, encoding="utf-8")
         replacements[layout_path.lower()] = settings

@@ -138,6 +138,7 @@ int dm_tc_scene_dead(void);   /* 死亡弹窗开着（导航态，但不给手�
 /* 安全区左右内缩（点）；在 init / resize 之前设，之后的布局按它把右侧技能键组与左摇杆移进安全区。缺省 0。 | Left/right safe-area insets (points); set before init / resize, and the layout afterwards uses them to move the right-side skill key group and the left stick into the safe area. Default 0. */
 void dm_tc_set_safe_insets(float left, float right);
 void dm_tc_set_edge_bottom(float bottom);   /* 屏幕底边归系统的那一条的高度（点）；0 = 没有。只约束移动摇杆的起手 | Height (points) of the strip along the bottom edge of the screen that belongs to the system; 0 = none. Constrains only where the movement stick may start */
+void dm_tc_set_hud_bottom(float design_pixels); /* Bottom-HUD vertical lift in the 1320-high design space; also moves belt/skill hit targets. Default 0. */
 void dm_tc_layout_make(dm_tc_layout *layout, float width, float height);
 int dm_tc_hit(const dm_tc_layout *layout, float x, float y);
 #define DM_TC_POINTER_LIFT_PT 40.0f   // 功能页拖动时物品抬在手指上方的点数（× 控件缩放） | Number of points the item is lifted above the finger while dragging on function pages (× widget scale)
