@@ -1,18 +1,18 @@
-// 比 16:9 窄的屏（iPad 4:3）上让游戏界面按 16:9 摆、3D 仍铺满整屏。缺省关：不打开时不写任何东西，下面几个换算都是恒等。实现与依据见 dm_uiscreen.c
-// On screens narrower than 16:9 (iPad 4:3), lay out the game UI at 16:9 while 3D still fills the whole screen. Off by default: when not turned on nothing is written, and the conversions below are all identity. Implementation and basis in dm_uiscreen.c
+// Android widescreen gameplay keeps the game's full-screen HUD layout and touch geometry aligned with the wide render target.
+// Menus/loading retain their separate 16:9 output. Implementation and rationale: dm_uiscreen.c.
 #pragma once
 enum { DM_UISCREEN_OFF, DM_UISCREEN_TOP, DM_UISCREEN_CENTER, DM_UISCREEN_BOTTOM };
-void dm_uiscreen_enable(int mode);           // 前端在「窗口比 16:9 窄」时调：DM_UISCREEN_BOTTOM 等 = 打开，界面矩形（宽 = 画面宽、高 = 宽÷16×9）贴顶 / 居中 / 贴底；DM_UISCREEN_OFF = 关掉并把游戏的值写回。任意线程调，下一帧生效 | Called by the front end when "the window is narrower than 16:9": DM_UISCREEN_BOTTOM etc. = turn on, with the UI rectangle (width = frame width, height = width÷16×9) top-aligned / centered / bottom-aligned; DM_UISCREEN_OFF = turn off and write the game's values back. Callable from any thread, takes effect next frame
-void dm_uiscreen_pump(void);                 // 游戏主线程每帧调：发现游戏重写了「屏幕宽高」全局量（开机、切主机 / 掌机档）就记下真实值并改写成界面用的值——只此一处，不分时机 | Called every frame on the game main thread: on finding that the game rewrote the "screen width / height" globals (boot, switching docked / handheld mode), record the real values and rewrite them to the values the UI uses - this one place only, regardless of occasion
+void dm_uiscreen_enable(int mode);           // Select UI placement mode; Android wide gameplay keeps full render dimensions.
+void dm_uiscreen_pump(void);                 // Capture real screen dimensions; Android gameplay UI globals remain full-size.
 int dm_screen_real(int *w, int *h);          // Real frame dimensions, independent of the UI layout.
 void dm_uiscreen_surface_size(int width, int height);  // Current Vulkan output surface in pixels; supplied by Android window/swapchain.
 void dm_uiscreen_presented_size(int width, int height); // Latest presented source image size (after crop); supplied by Vulkan presenter.
 void dm_ui_screen_to_game(float screen_x, float screen_y, float *game_x, float *game_y); // Surface-normalized input -> displayed game-image normalized coordinates.
-void dm_ui_rect(int *x, int *y, int *w, int *h);   // UI safe rectangle in real-frame pixels.
-float dm_ui_nx(float nx_real);               // Real-frame normalized X -> UI safe-rectangle normalized X.
-float dm_ui_nx_back(float nx_ui);            // UI safe-rectangle normalized X -> real-frame normalized X.
-float dm_ui_ny(float ny_real);               // Real-frame normalized Y -> UI rectangle normalized Y.
-float dm_ui_ny_back(float ny_ui);            // UI rectangle normalized Y -> real-frame normalized Y.
+void dm_ui_rect(int *x, int *y, int *w, int *h);   // UI rectangle in real-frame pixels; full frame during gameplay.
+float dm_ui_nx(float nx_real);               // Real-frame normalized X -> UI-rectangle normalized X.
+float dm_ui_nx_back(float nx_ui);            // UI-rectangle normalized X -> real-frame normalized X.
+float dm_ui_ny(float ny_real);               // Real-frame normalized Y -> UI-rectangle normalized Y.
+float dm_ui_ny_back(float ny_ui);            // UI-rectangle normalized Y -> real-frame normalized Y.
 int dm_ui_proj_dy(void);
 int dm_uiscreen_ingame(void);                // 1 = 局内（真全屏）；0 = 局外（前端各页与读取画面：16:9 居中留边）。唯一信号，任意线程读 | 1 = in a run (true fullscreen); 0 = out of a run (front end pages and loading screen: 16:9 centered with margins). The single signal, readable from any thread
 void dm_uiscreen_set_ingame(int on);          // 只许界面每帧那一处（dm_cursor.c）调 | May only be called from the per-frame UI site (dm_cursor.c)

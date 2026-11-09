@@ -344,9 +344,6 @@ static void screen_release(void) {
 // dm_gfx_suspend is allowed to be absent: without it we simply do not suspend, and the fixtures have no concurrent
 // presenting to race against anyway.
 __attribute__((weak)) void dm_gfx_suspend(int on);
-#pragma weak dm_uiscreen_ingame
-#pragma weak dm_screen_real
-#pragma weak dm_ui_rect
 // 窗口销毁 / 新建时由前端调用。窗口销毁不再等于退出进程：安卓在 Activity 停止时必然销毁窗口，
 // 保留进程才能在回到前台时接着玩；真正的退出走 destroyed() 那条路。
 // Called by the front end when the window goes away or appears. A destroyed window no longer means the process

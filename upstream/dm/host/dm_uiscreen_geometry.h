@@ -1,28 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-static inline int64_t dm_ui_round_pixel(float value) {
-    return (int64_t)(value >= 0.0f ? value + 0.5f : value - 0.5f);
-}
-static inline int64_t dm_ui_scale_pixel(int64_t position, int target, int full) {
-    if (full <= 0) return position;
-    int64_t numerator = position * target;
-    return numerator >= 0 ? (numerator + full / 2) / full : (numerator - full / 2) / full;
-}
 
-static inline void dm_ui_safe_size(int rw, int rh, int *uw, int *uh) {
-    if (rw <= 0 || rh <= 0) { *uw = *uh = 0; return; }
-    if ((int64_t)rw * 9 > (int64_t)rh * 16) {
-        *uw = (int)((int64_t)rh * 16 / 9) & ~1;
-        *uh = rh;
-    } else if ((int64_t)rw * 9 < (int64_t)rh * 16) {
-        *uw = rw;
-        *uh = (int)((int64_t)rw * 9 / 16) & ~1;
-    } else {
-        *uw = rw;
-        *uh = rh;
-    }
-}
 static inline unsigned dm_ui_gcd(unsigned a, unsigned b) {
     while (b) { unsigned r = a % b; a = b; b = r; }
     return a;
@@ -85,57 +64,4 @@ static inline float dm_ui_safe_inverse(float n, int origin, int extent, int full
 static inline float dm_ui_world_x_scale(int logical_w, int real_w) {
     return logical_w > 0 && real_w > 0 && real_w > logical_w
         ? (float)logical_w / (float)real_w : 1.0f;
-}
-// The established NVN UI pass uses four vertices, two active attributes,
-// and a 20-byte vertex stride. Its viewport is the full render target, not
-// the 16:9 logical UI canvas.
-static inline int dm_ui_draw_signature(int vertex_count, int attribute_count, int stride) {
-    return vertex_count == 4 && attribute_count == 2 && stride == 20;
-}
-
-
-static inline void dm_ui_safe_viewport(float vx, float vy, float vw, float vh,
-                                       int origin_x, int origin_y, int full_w, int full_h,
-                                       int target_w, int target_h,
-                                       float *x, float *y, float *w, float *h) {
-    int64_t left = dm_ui_round_pixel(vx), top = dm_ui_round_pixel(vy);
-    int64_t right = dm_ui_round_pixel(vx + vw), bottom = dm_ui_round_pixel(vy + vh);
-    int64_t left_px = dm_ui_scale_pixel(origin_x + left, target_w, full_w);
-    int64_t top_px = dm_ui_scale_pixel(origin_y + top, target_h, full_h);
-    int64_t right_px = dm_ui_scale_pixel(origin_x + right, target_w, full_w);
-    int64_t bottom_px = dm_ui_scale_pixel(origin_y + bottom, target_h, full_h);
-    *x = (float)left_px;
-    *y = (float)top_px;
-    *w = (float)(right_px - left_px);
-    *h = (float)(bottom_px - top_px);
-}
-
-static inline void dm_ui_safe_scissor(int x, int y, int w, int h,
-                                      int origin_x, int origin_y, int safe_w, int safe_h,
-                                      int full_w, int full_h, int target_w, int target_h,
-                                      int *out_x, int *out_y, int *out_w, int *out_h) {
-    int64_t right = (int64_t)x + (w > 0 ? w : safe_w);
-    int64_t bottom = (int64_t)y + (h > 0 ? h : safe_h);
-    int64_t left_px = dm_ui_scale_pixel((int64_t)origin_x + x, target_w, full_w);
-    int64_t top_px = dm_ui_scale_pixel((int64_t)origin_y + y, target_h, full_h);
-    int64_t right_px = dm_ui_scale_pixel((int64_t)origin_x + right, target_w, full_w);
-    int64_t bottom_px = dm_ui_scale_pixel((int64_t)origin_y + bottom, target_h, full_h);
-    int64_t safe_left = dm_ui_scale_pixel(origin_x, target_w, full_w);
-    int64_t safe_top = dm_ui_scale_pixel(origin_y, target_h, full_h);
-    int64_t safe_right = dm_ui_scale_pixel((int64_t)origin_x + safe_w, target_w, full_w);
-    int64_t safe_bottom = dm_ui_scale_pixel((int64_t)origin_y + safe_h, target_h, full_h);
-    if (left_px < safe_left) left_px = safe_left;
-    if (top_px < safe_top) top_px = safe_top;
-    if (right_px > safe_right) right_px = safe_right;
-    if (bottom_px > safe_bottom) bottom_px = safe_bottom;
-    if (left_px < 0) left_px = 0;
-    if (top_px < 0) top_px = 0;
-    if (right_px > target_w) right_px = target_w;
-    if (bottom_px > target_h) bottom_px = target_h;
-    if (right_px < left_px) right_px = left_px;
-    if (bottom_px < top_px) bottom_px = top_px;
-    *out_x = (int)left_px;
-    *out_y = (int)top_px;
-    *out_w = (int)(right_px - left_px);
-    *out_h = (int)(bottom_px - top_px);
 }

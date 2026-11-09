@@ -1,8 +1,9 @@
-// The game UI uses screen-width/height globals. Keep its logical canvas at 16:9 on both narrow and wide targets;
-// the world render target and world-touch coordinates remain full-size. Android Vulkan maps the isolated UI draw pass
-// into this centered safe rectangle. Front-end/loading output remains the game's native 16:9 layout.
-// 游戏 UI 使用屏幕宽高全局量。宽、窄屏均将逻辑画布保持为 16:9；世界渲染目标与世界触点仍使用全尺寸。
-// Android Vulkan 将独立 UI 绘制通道映射到居中的安全矩形；前端/读取画面保持原生 16:9。
+// Front-end pages and loading retain the game's 16:9 output. In gameplay the game's UI globals, touch layout,
+// viewport, and scissor stay at the actual wide render dimensions; constraining only the Vulkan viewport to 16:9
+// cropped the HUD and large panels because the Switch HUD layout anchors its widgets to the full screen.
+// 前端与读取画面仍按游戏原生 16:9 输出。局内游戏 UI 全局尺寸、触摸布局、viewport 与 scissor 均保持真实宽屏出图尺寸；
+// 只把 Vulkan viewport 限制到 16:9 会裁切 HUD 和大面板，因为 Switch 手柄 HUD 布局以整屏为锚点。
+// Coordinates used by input helpers remain identity-mapped when the full-frame UI rectangle is active.
 #include "dm_uiscreen.h"
 #include "dm_uiscreen_geometry.h"
 #include "hle.h"
@@ -86,8 +87,9 @@ void dm_uiscreen_res_reread(void) {
     if (g[0] == atomic_load(&g_uw) && g[1] == atomic_load(&g_uh)) { g[0] = rw; g[1] = atomic_load(&g_rh); }
     atomic_store(&g_rw, 0);
 }
-// Menu/loading output stays 16:9. In-game UI globals use a centered 16:9 logical canvas while the render target
-// remains wide; dm_ui_rect is the single physical mapping used by the UI renderer and UI-coordinate input.
+// In-game, preserve the actual wide dimensions for both UI layout and rendering. The game-provided HUD
+// layout already uses full-screen anchors; dm_ui_rect is therefore the full render target and input mapping is identity.
+// 局内 UI 排版与绘制均保留真实宽屏尺寸。游戏 HUD 布局以整屏为锚点，因此 dm_ui_rect 覆盖整个出图目标，输入映射为恒等变换。
 static _Atomic int g_world, g_res_live;
 uint64_t dm_game_res(int docked) {
     uint64_t r = front_game_res(docked); uint32_t w = (uint32_t)r, h = (uint32_t)(r >> 32);
@@ -112,8 +114,11 @@ void dm_uiscreen_pump(void) {
     }
     int w = g[0], h = g[1]; if (w <= 0 || h <= 0) return;
     if (rw && w == atomic_load(&g_uw) && h == atomic_load(&g_uh)) return;
+    // Keep gameplay UI layout at the same dimensions as the world render target. The Switch HUD
+    // layout uses full-screen anchors; shrinking only this logical canvas cuts off panels and HUD.
 #ifdef __ANDROID__
-    int uw, uh; dm_ui_safe_size(w, h, &uw, &uh);
+    // Android gameplay UI must keep the full wide dimensions; the game HUD layout uses full-screen anchors.
+    int uw = w, uh = h;
 #else
     int uw = w, uh = h; if ((long)w * 9 < (long)h * 16) uh = (int)((long)w * 9 / 16) & ~1;
 #endif

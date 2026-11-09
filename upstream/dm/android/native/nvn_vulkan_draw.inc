@@ -163,46 +163,7 @@ static void draw_graphics_inner(const p_draw *draw,const p_draw_idx *indexed) {
     VkPrimitiveTopology primitive=topology(draw?draw->prim:indexed->prim);
     // NVN 范围可反向或为常值，Vulkan 同样允许；默认 0..1 由状态初始化提供。
     float *v=state.viewports.v[0];VkViewport viewport={v[0],v[1],v[2]>0?v[2]:width,v[3]>0?v[3]:height,state.depth_range.n,state.depth_range.f};
-    // The game draws each UI pass through a full-target viewport, while its layout
-    // coordinates use the 16:9 logical canvas. Replace that viewport with the canvas
-    // bounds; remapping the full-target viewport's dimensions would leave it oversized.
-    // The signature matches the established NVN UI pass: four vertices, two attributes,
-    // 20-byte stride. World draws keep their original viewport.
-    int ui_draw=0;
-    int ux=0,uy=0,uw=0,uh=0,rw=0,rh=0;
-    if(dm_uiscreen_ingame&&dm_screen_real&&dm_ui_rect&&dm_uiscreen_ingame()&&
-       dm_screen_real(&rw,&rh)&&rw>0&&rh>0&&width==rw&&height==rh&&
-       draw&&!indexed&&dm_ui_draw_signature(draw->count,(int)nattr,(int)state.streams[0].stride)){
-        dm_ui_rect(&ux,&uy,&uw,&uh);
-        if(uw>0&&uh>0){
-            ui_draw=1;
-            dm_ui_safe_viewport(0,0,(float)uw,(float)uh,ux,uy,rw,rh,width,height,
-                                &viewport.x,&viewport.y,&viewport.width,&viewport.height);
-        }
-    }
-    {
-        static unsigned probe_count;
-        if(probe_count<24&&dm_uiscreen_ingame&&dm_screen_real&&dm_ui_rect&&dm_uiscreen_ingame()&&
-           dm_screen_real(&rw,&rh)&&rw>0&&rh>0&&width==rw&&height==rh&&
-           draw&&!indexed&&dm_ui_draw_signature(draw->count,(int)nattr,(int)state.streams[0].stride)){
-            dm_ui_rect(&ux,&uy,&uw,&uh);
-            LOG("[vulkan-ui-probe] draw=%llu target=%ux%u real=%dx%d ui=%dx%d@%d,%d signature=%d mapped=%d vp=%.2f,%.2f %.2fx%.2f sc=%d,%d %dx%d depth=%d",
-                (unsigned long long)draw_count,width,height,rw,rh,uw,uh,ux,uy,
-                draw&&!indexed?dm_ui_draw_signature(draw->count,(int)nattr,(int)state.streams[0].stride):0,
-                ui_draw,v[0],v[1],v[2],v[3],state.scissor.x,state.scissor.y,state.scissor.w,state.scissor.h,
-                state.rt.depth!=0);
-            probe_count++;
-        }
-    }
-
-    // Apply the same safe-rect mapping and clipping to every matching UI draw.
     VkRect2D scissor=graphics_scissor_clip(state.scissor,width,height);
-    if(ui_draw){
-        int sx,sy,sw,sh;
-        dm_ui_safe_scissor(state.scissor.x,state.scissor.y,state.scissor.w,state.scissor.h,
-                           ux,uy,uw,uh,rw,rh,width,height,&sx,&sy,&sw,&sh);
-        scissor=(VkRect2D){{sx,sy},{(uint32_t)sw,(uint32_t)sh}};
-    }
     // Metal clip Y points up while Vulkan's positive viewport points down; a negative viewport preserves NVN orientation.
     viewport.y += viewport.height; viewport.height = -viewport.height;
     uint64_t pipe_phase=dm_cpu_phase_begin();
