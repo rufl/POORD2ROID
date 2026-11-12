@@ -1302,15 +1302,17 @@ def _custom_keybinding_page(text): return _custom_page(text, 'KeyBindingMenu')
 def _scroll_speech_android(text):
     repls = (
         ('"rect": { "x": "$ScrollSpeechOffset", "y": 50, "width": 800, "height": 325 },',
-         '"rect": { "x": -810, "y": 340, "width": 1620, "height": 560 },'),
+         '"rect": { "x": -810, "y": 320, "width": 1620, "height": 500 },'),
+        ('"scrollStartOffset": -80,',
+         '"scrollStartOffset": -460,'),
         ('"rect": { "x": 0, "y": 0, "width": "$ScrollSpeechBorderWidth", "height": 345 },',
-         '"rect": { "x": 0, "y": 0, "width": 1620, "height": 560 },'),
+         '"rect": { "x": 0, "y": 0, "width": 1620, "height": 500 },'),
         ('"rect": { "x": 50, "y": 8, "width": "$ScrollSpeechWidth", "height": 330 },',
-         '"rect": { "x": 60, "y": 20, "width": 1460, "height": 520 },'),
+         '"rect": { "x": 60, "y": 20, "width": 1460, "height": 460 },'),
         ('"rect": { "x": 0, "y": 330, "width": "$ScrollSpeechWidth", "height": 2000 },',
-         '"rect": { "x": 0, "y": 520, "width": 1460, "height": 2400 },'),
+         '"rect": { "x": 0, "y": 380, "width": 1460, "height": 2400 },'),
         ('"rect": { "x": -33, "y": 28, "width": 26, "height": 290 },',
-         '"rect": { "x": -33, "y": 28, "width": 26, "height": 504 },'),
+         '"rect": { "x": -33, "y": 28, "width": 26, "height": 444 },'),
     )
     for old, new in repls:
         if text.count(old) != 1:
