@@ -149,7 +149,7 @@ with tempfile.TemporaryDirectory() as t:
     # according to mode): the three Chronicle ones. Font profiles are present only in the large overlay variant.
     SHARED_TODO=('chroniclebaselistpanelhd.json','chroniclepanelhd.json','dropdownlistcontentshd.json')
     if FONT_LARGE: SHARED_TODO += ('controller/_profileconsolehd.json','controller/_profilehandheldhd.json')
-    if TARGET == 'android': SHARED_TODO += ('keybindingmenuhd.json',)
+    if TARGET == 'android': SHARED_TODO += ('keybindingmenuhd.json','scrollspeechpanelhd.json')
     PADROOT=touch_layout.build_pad_root(romfs,tpad); PADROOT_KEYS={k[len(LAY):] for k in PADROOT}   # 三份选项页：原路径放手柄那份，触屏那份挪到触屏这边 | The three options pages: the controller copy goes at the original path, the touch copy moves to the touch side
     UNSHARE=('confirmationmodalhd.json','dismissablemodalhd.json','helpbuttonpanelhd.json','npcdialogpanelhd.json','youdiedmodalhd.json')   # 只该给触屏的：挪到触屏这边（见 emit） | Touch-only ones: moved to the touch side (see emit)
     PADLAY={k:v for k,v in PR.items() if touch_path(k)}   # 手柄版只取布局（数据表、图与触屏版同一份） | The controller version takes only layouts (data tables and images are the same copy as the touch version)

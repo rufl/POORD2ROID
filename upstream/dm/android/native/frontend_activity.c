@@ -47,6 +47,9 @@ typedef struct {
     int hud_touch_id,hud_touch_hit,hud_touch_active;
     uint64_t hud_touch_button;float hud_touch_x,hud_touch_y;
     uint64_t pad_prev_b;dm_pad_mode_state pad_state;
+    // IDs classificados pelo framework Java como controles com eixos. Fallback para firmwares que emitem source
+    // incorreto no AInputQueue; callbacks Java e input_ready rodam no Looper principal.
+    int pad_device_ids[32];unsigned pad_device_count;
     pthread_t debug_thread;int debug_started;_Atomic int debug_stop;
     float requested_frame_rate;int frame_rate_attempted;
     int swapchain_width,swapchain_height;   // 当前交换链的窗口尺寸：旋转（两个横向）时不变 | window size of the current swapchain: unchanged by a rotation between the two landscapes
@@ -60,6 +63,9 @@ static game_app *application;
 // UI mouse path; gameplay uses the shared touch-control geometry for skill and belt zones.
 // Controller takeover still controls Java virtual-control visibility and physical-stick routing.
 static _Atomic int g_pad_mode;   // 1 = 手柄模式，0 = 触屏模式 | 1 = controller mode, 0 = touch mode
+static _Atomic unsigned g_dbg_pad_devs;
+static _Atomic uint64_t g_dbg_pad_btn;
+static _Atomic int32_t g_dbg_pad_lx,g_dbg_pad_ly;
 void dm_padmode_request(int pad);   // 宿主 dm_padmode.c：布局换成原版手柄版 / 触屏版 | Host dm_padmode.c: switch the layouts
 static _Atomic int display_hz;
 // 运行时可切的调试浮层（游戏内菜单的「帧率显示」）：UI 线程写，调试线程每拍读。启动初值见 debug_overlay 的读取处。
@@ -213,7 +219,8 @@ static void *progress_watch(void *argument) {
                 int charging=status==2||status==5;
                 snprintf(power,sizeof power,dm_ui(charging?"dmAndroidCharging":"dmAndroidPower"),value,capacity<0?0.0:(double)capacity);
             }else snprintf(power,sizeof power,dm_ui("dmAndroidPower"),"--",0.0);
-            char text[1024];snprintf(text,sizeof text,dm_ui("dmAndroidDebugMetrics"),stats.frame_ms>0?1000/stats.frame_ms:0,stats.frame_ms,stats.cpu_ms,gpu,stats.wait_ms,power,stats.draws,stats.passes,stats.submits,stats.snapshot_mb,stats.buffer_mb,pages*sysconf(_SC_PAGESIZE)/1048576.,stage,hud.area,hud.x,hud.y,(unsigned long long)dm_input_samples());
+            char text[1152];int n=snprintf(text,sizeof text,dm_ui("dmAndroidDebugMetrics"),stats.frame_ms>0?1000/stats.frame_ms:0,stats.frame_ms,stats.cpu_ms,gpu,stats.wait_ms,power,stats.draws,stats.passes,stats.submits,stats.snapshot_mb,stats.buffer_mb,pages*sysconf(_SC_PAGESIZE)/1048576.,stage,hud.area,hud.x,hud.y,(unsigned long long)dm_input_samples());
+            if(n>0&&(size_t)n<sizeof text){snprintf(text+n,sizeof text-(size_t)n,"\nPad: %s devs=%u btn=%#llx L=%d,%d",atomic_load(&g_pad_mode)?"pad":"touch",atomic_load(&g_dbg_pad_devs),(unsigned long long)atomic_load(&g_dbg_pad_btn),atomic_load(&g_dbg_pad_lx),atomic_load(&g_dbg_pad_ly));}
             jstring value=java_text(env,text);(*env)->CallVoidMethod(env,a->clazz,method,value);(*env)->DeleteLocalRef(env,value);
             if((*env)->ExceptionCheck(env)){(*env)->ExceptionDescribe(env);(*env)->ExceptionClear(env);break;}
         }
@@ -596,6 +603,8 @@ static void pad_publish(game_app *s) {
     int32_t rx=s->rx,ry=s->ry;if(!atomic_load(&g_pad_mode)||!s->pad_state.stick_on[1]){rx=0;ry=0;}
     if(!rx&&!ry){rx=s->touch_rx;ry=s->touch_ry;}
     dm_pad_set(s->pad_buttons|s->hat_buttons|s->trigger_buttons|s->touch_buttons|(s->tap_a?DM_BTN_A:0),x,y,rx,ry);
+    atomic_store(&g_dbg_pad_btn,s->pad_buttons|s->hat_buttons|s->trigger_buttons);
+    atomic_store(&g_dbg_pad_lx,s->lx);atomic_store(&g_dbg_pad_ly,s->ly);
 }
 static void pad_clear(game_app *s) {s->pad_buttons=s->hat_buttons=s->trigger_buttons=s->move_keys=s->touch_buttons=0;s->tap_a=0;s->lx=s->ly=s->rx=s->ry=s->touch_lx=s->touch_ly=s->touch_rx=s->touch_ry=0;s->pad_prev_b=0;pad_publish(s);}
 static int32_t touch_axis(jint value) {return value>DM_STICK_MAX?DM_STICK_MAX:value< -DM_STICK_MAX?-DM_STICK_MAX:value;}
@@ -820,6 +829,24 @@ __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivit
     set_pad_mode(s,mode,0);
     if(!present)pad_publish(s);
 }
+__attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setPadDevices(JNIEnv *env,jclass klass,jintArray ids) {
+    (void)klass;game_app *s=application;if(!s)return;
+    jsize count=ids?(*env)->GetArrayLength(env,ids):0;
+    if(count>(jsize)(sizeof s->pad_device_ids/sizeof s->pad_device_ids[0]))
+        count=(jsize)(sizeof s->pad_device_ids/sizeof s->pad_device_ids[0]);
+    s->pad_device_count=0;
+    if(count>0) {
+        (*env)->GetIntArrayRegion(env,ids,0,count,s->pad_device_ids);
+        if((*env)->ExceptionCheck(env)){(*env)->ExceptionClear(env);return;}
+        s->pad_device_count=(unsigned)count;
+    }
+    atomic_store(&g_dbg_pad_devs,s->pad_device_count);
+    LOG("[android-pad] pad_device_ids updated count=%u",s->pad_device_count);
+}
+static int pad_device_known(const game_app *s,int id) {
+    for(unsigned i=0;i<s->pad_device_count;i++)if(s->pad_device_ids[i]==id)return 1;
+    return 0;
+}
 static int32_t stick_value(float value) {if(value>1)value=1;if(value<-1)value=-1;return value>-.15f&&value<.15f?0:(int32_t)(value*DM_STICK_MAX);}
 static uint64_t pad_key(int key) {
     switch(key){case AKEYCODE_DPAD_UP:return DM_BTN_UP;case AKEYCODE_DPAD_DOWN:return DM_BTN_DOWN;case AKEYCODE_DPAD_LEFT:return DM_BTN_LEFT;case AKEYCODE_DPAD_RIGHT:return DM_BTN_RIGHT;
@@ -836,10 +863,14 @@ static int input_ready(int fd,int events,void *data) {
         // Pad events arrive with either a JOYSTICK or a GAMEPAD source. Accepting only the former sends a
         // GAMEPAD-source D-pad into the touch branch below, where it is read as a finger position.
         int source=AInputEvent_getSource(event),is_motion=AInputEvent_getType(event)==AINPUT_EVENT_TYPE_MOTION;
-        // 手柄来源与键盘来源分开：键盘的 Enter/Space 也映射成 A，但那是键盘动作，不该把手柄模式拉起来
-        // （否则用键盘的玩家会突然失去屏幕虚拟手柄）。手柄的键事件源带 JOYSTICK/GAMEPAD。
-        int pad_source=(source&(AINPUT_SOURCE_JOYSTICK|AINPUT_SOURCE_GAMEPAD))!=0;
-        // 游戏内菜单打开时挡住手柄与按键：菜单是独立窗口，手柄事件照样从 AInputQueue 进来，不挡的话角色会在菜单后面
+        // Exigir a máscara completa evita que CLASS_BUTTON comum a teclados conte como GAMEPAD. O ID sincronizado
+        // pelo framework é o fallback para controles reais cujo firmware marca o source errado.
+        int source_pad=(source&AINPUT_SOURCE_JOYSTICK)==AINPUT_SOURCE_JOYSTICK||
+            (source&AINPUT_SOURCE_GAMEPAD)==AINPUT_SOURCE_GAMEPAD||
+            (is_motion&&(source&AINPUT_SOURCE_CLASS_JOYSTICK)==AINPUT_SOURCE_CLASS_JOYSTICK);
+        int known_pad=pad_device_known(s,AInputEvent_getDeviceId(event));
+        int pad_source=source_pad||known_pad;
+        int pad_motion=is_motion&&pad_source;
         // 继续动。两处**放行**：① 返回键 —— 它要走到菜单窗口去把菜单收起（菜单是 focusable 弹窗，自己会吃掉返回键）；
         // ② 触摸 —— 菜单自己的触摸走它自己的窗口，屏幕手柄也要能点。
         // While the in-game menu is open, pad and key events are swallowed here: the menu is a separate window and
@@ -847,8 +878,9 @@ static int input_ready(int fd,int events,void *data) {
         // Two exceptions: ① the back key, which has to reach the menu window so it can be closed (a focusable popup
         // consumes it itself); ② touches, since the menu's touches go to its own window and the on-screen controls
         // must stay usable.
-        if(atomic_load(&menu_open)&&((AInputEvent_getType(event)==AINPUT_EVENT_TYPE_KEY&&AKeyEvent_getKeyCode(event)!=AKEYCODE_BACK)||(is_motion&&(source&(AINPUT_SOURCE_JOYSTICK|AINPUT_SOURCE_GAMEPAD))))){AInputQueue_finishEvent(s->input,event,1);continue;}
-        if(is_motion&&(source&(AINPUT_SOURCE_JOYSTICK|AINPUT_SOURCE_GAMEPAD))){
+        if(atomic_load(&menu_open)&&((AInputEvent_getType(event)==AINPUT_EVENT_TYPE_KEY&&AKeyEvent_getKeyCode(event)!=AKEYCODE_BACK)||pad_motion)){AInputQueue_finishEvent(s->input,event,1);continue;}
+        if(pad_motion){
+            static int motion_logged;if(!motion_logged){motion_logged=1;LOG("[android-pad] first motion device=%d source=%#x known=%d",AInputEvent_getDeviceId(event),(unsigned)source,known_pad);}
             s->lx=stick_value(AMotionEvent_getAxisValue(event,AMOTION_EVENT_AXIS_X,0));s->ly=stick_value(-AMotionEvent_getAxisValue(event,AMOTION_EVENT_AXIS_Y,0));
             float x=AMotionEvent_getAxisValue(event,AMOTION_EVENT_AXIS_Z,0),y=AMotionEvent_getAxisValue(event,AMOTION_EVENT_AXIS_RZ,0);if(!x)x=AMotionEvent_getAxisValue(event,AMOTION_EVENT_AXIS_RX,0);if(!y)y=AMotionEvent_getAxisValue(event,AMOTION_EVENT_AXIS_RY,0);s->rx=stick_value(x);s->ry=stick_value(-y);
             // 十字键：不少手柄（含 Xbox）把它报成 HAT 轴而不是 DPAD 键码，之前整块被丢掉，方向键就没反应。
@@ -880,16 +912,21 @@ static int input_ready(int fd,int events,void *data) {
             // Controller activity -> controller mode (the on-screen controls hide).
             pad_activity(s);
             pad_publish(s);handled=1;
-        }else if(is_motion){int raw_action=AMotionEvent_getAction(event),action=raw_action&AMOTION_EVENT_ACTION_MASK;unsigned lifted=(raw_action&AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)>>AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;dm_touch touches[16];int count=0;
-            pthread_mutex_lock(&s->lock);ANativeWindow *window=s->window;int w=window?ANativeWindow_getWidth(window):1,h=window?ANativeWindow_getHeight(window):1;pthread_mutex_unlock(&s->lock);
-            if(action!=AMOTION_EVENT_ACTION_UP&&action!=AMOTION_EVENT_ACTION_CANCEL)for(unsigned i=0;i<AMotionEvent_getPointerCount(event)&&count<16;i++){float x=AMotionEvent_getX(event,i)/w,y=AMotionEvent_getY(event,i)/h,gx,gy;dm_ui_screen_to_game(x,y,&gx,&gy);if(gx>=0&&gx<1&&gy>=0&&gy<1)touches[count++]=(dm_touch){AMotionEvent_getPointerId(event,i)&15,gx,gy};}
-            dm_touch_set(touches,count);
-            // 碰了游戏画面 → 触屏模式（屏幕虚拟手柄回来）。屏幕虚拟手柄自己的触摸在 Java 那边消费，不走这里，
-            // 所以玩家用虚拟手柄时模式不变（本来就在触屏模式）。
-            // The game screen was touched -> touch mode (the on-screen controls come back). The on-screen controls' own
-            // touches are consumed by Java and never reach here, so using them keeps the mode as it is.
-            // UI panels use the shared native mouse path; HUD targets use touch-aligned skill/potion actions.
-            android_touch_input(s,event,w,h);pad_publish(s);handled=1;
+        }else if(is_motion&&(source&AINPUT_SOURCE_TOUCHSCREEN)==AINPUT_SOURCE_TOUCHSCREEN){int raw_action=AMotionEvent_getAction(event),action=raw_action&AMOTION_EVENT_ACTION_MASK;
+            if(action==AMOTION_EVENT_ACTION_DOWN||action==AMOTION_EVENT_ACTION_POINTER_DOWN||
+               action==AMOTION_EVENT_ACTION_MOVE||action==AMOTION_EVENT_ACTION_UP||
+               action==AMOTION_EVENT_ACTION_POINTER_UP||action==AMOTION_EVENT_ACTION_CANCEL){
+                dm_touch touches[16];int count=0;
+                pthread_mutex_lock(&s->lock);ANativeWindow *window=s->window;int w=window?ANativeWindow_getWidth(window):1,h=window?ANativeWindow_getHeight(window):1;pthread_mutex_unlock(&s->lock);
+                if(action!=AMOTION_EVENT_ACTION_UP&&action!=AMOTION_EVENT_ACTION_CANCEL)for(unsigned i=0;i<AMotionEvent_getPointerCount(event)&&count<16;i++){float x=AMotionEvent_getX(event,i)/w,y=AMotionEvent_getY(event,i)/h,gx,gy;dm_ui_screen_to_game(x,y,&gx,&gy);if(gx>=0&&gx<1&&gy>=0&&gy<1)touches[count++]=(dm_touch){AMotionEvent_getPointerId(event,i)&15,gx,gy};}
+                dm_touch_set(touches,count);
+                // 碰了游戏画面 → 触屏模式（屏幕虚拟手柄回来）。屏幕虚拟手柄自己的触摸在 Java 那边消费，不走这里，
+                // 所以玩家用虚拟手柄时模式不变（本来就在触屏模式）。
+                // The game screen was touched -> touch mode (the on-screen controls come back). The on-screen controls' own
+                // touches are consumed by Java and never reach here, so using them keeps the mode as it is.
+                // UI panels use the shared native mouse path; HUD targets use touch-aligned skill/potion actions.
+                android_touch_input(s,event,w,h);pad_publish(s);handled=1;
+            }
         }else if(AInputEvent_getType(event)==AINPUT_EVENT_TYPE_KEY){int key=AKeyEvent_getKeyCode(event),down=AKeyEvent_getAction(event)==AKEY_EVENT_ACTION_DOWN;uint64_t button=pad_key(key),move=key==AKEYCODE_W?DM_BTN_UP:key==AKEYCODE_A?DM_BTN_LEFT:key==AKEYCODE_S?DM_BTN_DOWN:key==AKEYCODE_D?DM_BTN_RIGHT:0;
             if(button){uint64_t before=s->pad_buttons;if(down)s->pad_buttons|=button;else s->pad_buttons&=~button;handled=1;
                 // 手柄来源的判定：**键码优先**。键盘根本没有 BUTTON_* 与 DPAD_* 这些键码，所以它们本身就说明
@@ -902,14 +939,18 @@ static int input_ready(int fd,int events,void *data) {
                 // exist on keyboards, and those are told apart by the event source.
                 int controller_keycode=(key>=AKEYCODE_DPAD_UP&&key<=AKEYCODE_DPAD_CENTER)||(key>=AKEYCODE_BUTTON_A&&key<=AKEYCODE_BUTTON_MODE);
                 if(controller_keycode||pad_source)pad_activity(s);
-                if(pad_source!=controller_keycode)LOG("[android-pad] keycode=%d source=%#x 键码判定=%d 源判定=%d",key,(unsigned)source,controller_keycode,pad_source);
+                if(source_pad!=controller_keycode||known_pad!=source_pad)LOG("[android-pad] keycode=%d device=%d source=%#x 键码判定=%d 源判定=%d ID判定=%d",key,AInputEvent_getDeviceId(event),(unsigned)source,controller_keycode,source_pad,known_pad);
                 // 按键码这条路也要看得见（LB/RB/A/B 等走这里，部分手柄的方向键也走这里）：出问题时能直接对上
                 // 哪一颗键换来哪一位，不必靠猜。只在位掩码真的变了才记，连按不放不会刷屏。
                 // The keycode path has to be visible too (LB/RB/A/B and, on some pads, the D-pad come through here):
                 // when something misbehaves this shows which button produced which bit instead of leaving it to
                 // guesswork. Logged only when the mask really changes, so holding a button does not flood the log.
                 if(s->pad_buttons!=before)LOG("[android-pad] keycode=%d down=%d → buttons=%#llx",key,down,(unsigned long long)s->pad_buttons);}
-            if(move){if(down)s->move_keys|=move;else s->move_keys&=~move;handled=1;}if(handled)pad_publish(s);}
+            if(move){if(down)s->move_keys|=move;else s->move_keys&=~move;handled=1;}
+            if(!button&&!move&&down&&(pad_source||(key>=AKEYCODE_DPAD_UP&&key<=AKEYCODE_DPAD_CENTER)||(key>=AKEYCODE_BUTTON_A&&key<=AKEYCODE_BUTTON_MODE)||(key>=AKEYCODE_BUTTON_1&&key<=AKEYCODE_BUTTON_16))){
+                static int unmapped_logged;if(unmapped_logged++<20)LOG("[android-pad] unmapped keycode=%d device=%d source=%#x",key,AInputEvent_getDeviceId(event),(unsigned)source);
+            }
+            if(handled)pad_publish(s);}
         AInputQueue_finishEvent(s->input,event,handled);
     }return 1;
 }
@@ -1053,6 +1094,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
         {"onTextResult","(JLjava/lang/String;Z)V",(void*)Java_org_d2r_android_port_D2RActivity_onTextResult},
         {"onTouchPad","(JIIII)V",(void*)Java_org_d2r_android_port_D2RActivity_onTouchPad},
         {"setPadMode","(IZ)V",(void*)Java_org_d2r_android_port_D2RActivity_setPadMode},
+        {"setPadDevices","([I)V",(void*)Java_org_d2r_android_port_D2RActivity_setPadDevices},
         {"setOverlayEnabled","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setOverlayEnabled},
         {"setQualityPreset","(I)V",(void*)Java_org_d2r_android_port_D2RActivity_setQualityPreset},
         {"setAutoBounds","(II)V",(void*)Java_org_d2r_android_port_D2RActivity_setAutoBounds},

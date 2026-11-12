@@ -971,9 +971,9 @@ def _chronicle_no_search(s):
 # (on front-end pages 1 unit = 0.0337 mm: spacing 131 × 1.6 ≈ 7.1 mm); scaling uses the top-left corner as origin, and the frame's original position (-272, -270) is centered, so it is changed proportionally to (-435, -432)
 # NPC dialog menu (very narrow in the original game and hard to tap with a finger): the frame is widened and rows made taller until they are easy to tap; font size unchanged, and the frame is still the original game's nine-slice background image stretching itself.
 # Row pitch = text height + 2 × listEntryPadding.y: 10 → NPC_PAD_Y; left/right padding 32 → NPC_PAD_X
-NPC_PAD_X, NPC_PAD_Y = 150, 62
+NPC_PAD_X, NPC_PAD_Y = 200, 72
 def _npc_menu(s):
-    for a, b in (('"padding": { "left": 32, "top": 24, "right": 32, "bottom": 24 },', '"padding": { "left": %d, "top": 24, "right": %d, "bottom": 24 },' % (NPC_PAD_X, NPC_PAD_X)),
+    for a, b in (('"padding": { "left": 32, "top": 24, "right": 32, "bottom": 24 },', '"padding": { "left": %d, "top": 32, "right": %d, "bottom": 32 },' % (NPC_PAD_X, NPC_PAD_X)),
                  ('"listEntryPadding": { "x": 0, "y": 10 },', '"listEntryPadding": { "x": 0, "y": %d },' % NPC_PAD_Y)):
         if s.count(a) != 1: raise SystemExit('touch_layout：NPC 对话菜单 %s 不是原样（原版布局变了？）' % a)
         s = s.replace(a, b)
@@ -1299,11 +1299,31 @@ def pad_settings(s): return s
 def pad_custom_page(s): return _custom_page(s)[0]
 def _custom_keybinding_page(text): return _custom_page(text, 'KeyBindingMenu')
 
+def _scroll_speech_android(text):
+    repls = (
+        ('"rect": { "x": "$ScrollSpeechOffset", "y": 50, "width": 800, "height": 325 },',
+         '"rect": { "x": -810, "y": 340, "width": 1620, "height": 560 },'),
+        ('"rect": { "x": 0, "y": 0, "width": "$ScrollSpeechBorderWidth", "height": 345 },',
+         '"rect": { "x": 0, "y": 0, "width": 1620, "height": 560 },'),
+        ('"rect": { "x": 50, "y": 8, "width": "$ScrollSpeechWidth", "height": 330 },',
+         '"rect": { "x": 60, "y": 20, "width": 1460, "height": 520 },'),
+        ('"rect": { "x": 0, "y": 330, "width": "$ScrollSpeechWidth", "height": 2000 },',
+         '"rect": { "x": 0, "y": 520, "width": 1460, "height": 2400 },'),
+        ('"rect": { "x": -33, "y": 28, "width": 26, "height": 290 },',
+         '"rect": { "x": -33, "y": 28, "width": 26, "height": 504 },'),
+    )
+    for old, new in repls:
+        if text.count(old) != 1:
+            raise SystemExit('touch_layout：Android 对话框 %s 不是原样（原版布局变了？）' % old)
+        text = text.replace(old, new)
+    return text, len(repls)
+
 def present_transforms(target=None):
     if (target or '').lower() != 'android': return PRESENT
     transforms = dict(PRESENT)
     transforms['controller/console/settingspanelhd.json'] = _settings_tabs_android
     transforms['keybindingmenuhd.json'] = _custom_keybinding_page
+    transforms['scrollspeechpanelhd.json'] = _scroll_speech_android
     return transforms
 # Hooked into PRESENT: for the same file (inserting 「应用 / 默认 / 放弃」(Apply / Default / Discard) into the options page) build_ingame applies the transform here first and then inserts the buttons, so two overlays that overwrite each other are not produced
 PRESENT['controller/console/settingspanelhd.json'] = _settings_tabs

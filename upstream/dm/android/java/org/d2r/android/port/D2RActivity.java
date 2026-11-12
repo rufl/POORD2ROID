@@ -18,6 +18,7 @@ import android.text.TextWatcher;
 import android.text.InputType;
 import android.view.WindowManager;
 import android.view.Display;
+import android.view.KeyEvent;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.util.Log;
@@ -36,6 +37,7 @@ import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Arrays;
 import android.view.Gravity;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -73,6 +75,11 @@ public final class D2RActivity extends NativeActivity {
     // Whether a controller is present, and the wanted mode (1 controller, 0 touch). The native side uses it to clear
     // the buttons that were held while the controller was unplugged.
     private static native void setPadMode(int pad, boolean present);
+    // IDs de dispositivos que o Android confirmou como controles com eixos. O nativo usa a lista como fallback
+    // quando um firmware anuncia eventos HID com source incorreto (incluindo alguns modos do GameSir G8 Plus).
+    // Device IDs Android confirmed as controllers with axes. Native input uses this as a fallback when controller
+    // firmware tags HID events with the wrong source (including some GameSir G8 Plus modes).
+    private static native void setPadDevices(int[] ids);
     private static native void setOverlayEnabled(boolean enabled);
     private static native void setQualityPreset(int preset);
     private static native void setAutoBounds(int minPct, int maxPct);
@@ -684,42 +691,66 @@ public final class D2RActivity extends NativeActivity {
         getWindow().getDecorView().post(() -> updateTouchVisibility());
     }
 
-    // 手柄是否接入。只认真正能推的摇杆轴，避免把触屏、遥控器、系统注入的虚拟键盘也算成手柄。
-    // Count only devices that actually expose stick axes, so touchscreens, remotes and virtual keyboards do not
-    // count as a controller.
+    // Lista de controles conectados. Além de decidir se os controles virtuais devem aparecer, os IDs seguem para o
+    // AInputQueue nativo: alguns firmwares enviam os eixos corretos, mas marcam o evento com source incorreto.
+    // Connected controller list. Besides deciding whether virtual controls should be visible, these IDs are sent to
+    // the native AInputQueue: some firmware exposes the correct axes but tags events with the wrong source.
     //
-    // 只看 source 位不够：小米的 `uinput-xiaomi`（KEYBOARD | GAMEPAD，实测 2510DRK44C）是系统注入的虚拟键盘
-    // 节点，一根轴都没有，却带着 GAMEPAD 位。按 source 判断会把它当"已接入手柄"，于是虚拟摇杆与按键
-    // 永远不显示（本机实测症状）。
-    // Source bits alone are not enough: Xiaomi's `uinput-xiaomi` (KEYBOARD | GAMEPAD, measured on 2510DRK44C) is a
-    // system-injected virtual keyboard node with no axes at all, yet it carries the GAMEPAD bit. Treating source bits
-    // as a controller hides the on-screen stick and buttons for good (the symptom measured on that device).
-    private boolean anyGamepad() {
+    // Só entram dispositivos com source de controle completo e eixos reais. Isso exclui o `uinput-xiaomi`
+    // (KEYBOARD | GAMEPAD sem eixo), que do contrário esconderia o controle virtual para sempre.
+    // Only devices with a complete controller source and real axes qualify. This excludes Xiaomi's `uinput-xiaomi`
+    // (KEYBOARD | GAMEPAD with no axes), which would otherwise hide the virtual controls forever.
+    private int[] gamepadDeviceIds() {
         InputManager manager = (InputManager) getSystemService(Context.INPUT_SERVICE);
-        if (manager == null) return false;
-        for (int id : manager.getInputDeviceIds()) {
+        if (manager == null) return new int[0];
+        int[] all = manager.getInputDeviceIds();
+        int[] found = new int[all.length];
+        int count = 0;
+        for (int id : all) {
             InputDevice device = manager.getInputDevice(id);
             if (device == null) continue;
             int sources = device.getSources();
-            // source 是「类别 + 类型」的复合值，不能用「与掩码有交集」判断：键盘 0x101、触摸屏 0x1103 都带
-            // 0x1（CLASS_BUTTON），与 SOURCE_GAMEPAD(0x401) 相交，于是触摸屏成了手柄候选，它自己的 ABS_X/ABS_Y
-            // 又正好满足下面的轴检查 —— 这就是本机 gamepad=true 的根因。必须按「掩码全中」判断。
-            // Sources are composite, so an "any shared bit" test is wrong: keyboards (0x101) and touchscreens
-            // (0x1103) carry the 0x1 CLASS_BUTTON bit, which overlaps SOURCE_GAMEPAD (0x401). The touchscreen then
-            // becomes a candidate and its own ABS_X/ABS_Y satisfy the axis test below -- the measured cause of
-            // gamepad=true here. Require all mask bits instead.
-            if ((sources & InputDevice.SOURCE_GAMEPAD) != InputDevice.SOURCE_GAMEPAD &&
-                (sources & InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) continue;
-            Log.i("D2RAndroid", "[touch] device " + id + " '" + device.getName() + "' sources=0x" +
-                Integer.toHexString(sources) + " ranges=" + device.getMotionRanges().size());
+            String name = device.getName();
+            boolean isGamepadSource = (sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD;
+            boolean isJoystickSource = (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+            boolean isTouchOrMouse =
+                (sources & InputDevice.SOURCE_TOUCHSCREEN) == InputDevice.SOURCE_TOUCHSCREEN ||
+                (sources & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
+                (sources & InputDevice.SOURCE_STYLUS) == InputDevice.SOURCE_STYLUS ||
+                (sources & InputDevice.SOURCE_TRACKBALL) == InputDevice.SOURCE_TRACKBALL;
+            boolean isJoystickClass = !isTouchOrMouse &&
+                (sources & InputDevice.SOURCE_CLASS_JOYSTICK) == InputDevice.SOURCE_CLASS_JOYSTICK;
+            boolean isGameSir = !isTouchOrMouse && name != null &&
+                name.toLowerCase(Locale.ROOT).contains("gamesir");
+            if (!isGamepadSource && !isJoystickSource && !isJoystickClass && !isGameSir) continue;
+            boolean hasAxis = false;
             for (InputDevice.MotionRange range : device.getMotionRanges()) {
                 int axis = range.getAxis();
                 if (axis == MotionEvent.AXIS_X || axis == MotionEvent.AXIS_Y ||
+                    axis == MotionEvent.AXIS_Z || axis == MotionEvent.AXIS_RZ ||
                     axis == MotionEvent.AXIS_RX || axis == MotionEvent.AXIS_RY ||
-                    axis == MotionEvent.AXIS_HAT_X || axis == MotionEvent.AXIS_HAT_Y) return true;
+                    axis == MotionEvent.AXIS_HAT_X || axis == MotionEvent.AXIS_HAT_Y) {
+                    hasAxis = true;
+                    break;
+                }
             }
+            boolean hasGamepadKey = false;
+            if (isGameSir && !hasAxis) {
+                boolean[] keys = device.hasKeys(
+                    KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B,
+                    KeyEvent.KEYCODE_BUTTON_X, KeyEvent.KEYCODE_BUTTON_Y,
+                    KeyEvent.KEYCODE_BUTTON_START);
+                for (boolean k : keys) { if (k) { hasGamepadKey = true; break; } }
+            }
+            boolean accept = hasAxis || (isGameSir && (hasGamepadKey || isGamepadSource || isJoystickSource));
+            Log.i("D2RAndroid", "[touch] device " + id + " '" + name + "' sources=0x" +
+                Integer.toHexString(sources) + " vid=0x" + Integer.toHexString(device.getVendorId()) +
+                " pid=0x" + Integer.toHexString(device.getProductId()) +
+                " ranges=" + device.getMotionRanges().size() +
+                " axis=" + hasAxis + " gamesir=" + isGameSir + " controller=" + accept);
+            if (accept) found[count++] = id;
         }
-        return false;
+        return Arrays.copyOf(found, count);
     }
 
     // 用设备级监听而不是事件分发：NativeActivity 把 AInputQueue 直接挂到主 Looper 消费了手柄事件，
@@ -741,13 +772,14 @@ public final class D2RActivity extends NativeActivity {
     // A mere device change does not take the takeover away: a player who just touched the screen must not be pulled
     // back into controller mode.
     private void refreshPhysicalController(boolean appeared) {
-        physicalController = anyGamepad();
-        // 自己先把状态记上：原生那边不再把「Java 自己要求切」这一路回播（回播会绕回 Java 的视图操作，
-        // 而这条路是 Java 触发的，来回一趟没有必要）。原生那边只在它自己改模式时（手柄有输入 / 碰了屏幕）
-        // 才通知 Java。
-        // Record the state here first: the native side no longer echoes back the "Java asked for it" path (the echo
-        // would bounce into Java's view work for no reason). The native side only notifies Java when it changes the
-        // mode itself (controller input, or the screen was touched).
+        int[] ids = gamepadDeviceIds();
+        physicalController = ids.length != 0;
+        // A lista é atualizada no mesmo Looper principal que entrega os eventos à NativeActivity, portanto o próximo
+        // evento já pode ser classificado pelo ID mesmo se o firmware omitir SOURCE_JOYSTICK/GAMEPAD.
+        // Updated on the same main Looper that feeds NativeActivity, so the next event can be classified by device ID
+        // even when firmware omits SOURCE_JOYSTICK/GAMEPAD.
+        setPadDevices(ids);
+        // Record the state here first. Native only calls back when actual input changes the mode.
         if (appeared && physicalController) { padMode = true; setPadMode(1, true); }
         else if (!physicalController) { padMode = false; setPadMode(0, false); }
         updateTouchVisibility();
@@ -756,6 +788,8 @@ public final class D2RActivity extends NativeActivity {
     @Override protected void onResume() {
         super.onResume();
         activityResumed = true;
+        boolean hadController = physicalController;
+        refreshPhysicalController(!hadController);
         // 把当前模式再告诉原生一次：进程重建后原生那边是新状态，这里是旧的，对齐一下。
         // Tell the native side the current mode once more: after a process restart the native state is fresh while this
         // one is stale, so bring them back in line.

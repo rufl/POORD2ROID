@@ -42,5 +42,22 @@ class AndroidDisplayTabTests(unittest.TestCase):
         self.assertIn('"name": "TouchCustomRows"', page)
 
 
+    def test_android_enlarges_scroll_speech_dialog_box(self):
+        transforms = touch_layout.present_transforms("android")
+        source = '''{
+            "fields": { "rect": { "x": "$ScrollSpeechOffset", "y": 50, "width": 800, "height": 325 }, },
+            "children": [
+                { "fields": { "rect": { "x": 0, "y": 0, "width": "$ScrollSpeechBorderWidth", "height": 345 }, } },
+                { "fields": { "rect": { "x": 50, "y": 8, "width": "$ScrollSpeechWidth", "height": 330 }, } },
+                { "fields": { "rect": { "x": 0, "y": 330, "width": "$ScrollSpeechWidth", "height": 2000 }, } },
+                { "fields": { "rect": { "x": -33, "y": 28, "width": 26, "height": 290 }, } }
+            ]
+        }'''
+        transformed, changes = transforms["scrollspeechpanelhd.json"](source)
+        self.assertEqual(changes, 5)
+        self.assertIn('"x": -810, "y": 340, "width": 1620, "height": 560', transformed)
+        self.assertIn('"x": 60, "y": 20, "width": 1460, "height": 520', transformed)
+        self.assertNotIn("scrollspeechpanelhd.json", touch_layout.PRESENT)
+
 if __name__ == "__main__":
     unittest.main()
