@@ -7,6 +7,12 @@ typedef struct image_entry {
     VkPipelineStageFlags last_stage;VkAccessFlags last_access;int gpu_written;
     VkImageLayout layout;   // 当前布局：采样侧用 SHADER_READ_ONLY_OPTIMAL，其余保持 GENERAL
     int attachment_seen;    // 做过渲染附件的图永远留在 GENERAL（通道的 initialLayout 是 GENERAL）
+    int storage_seen;       // 做过 storage image 的图永远留在 GENERAL（storage descriptor 要求 GENERAL）
+    int pending_clear_color,pending_clear_depth;
+    VkClearColorValue pending_color_value;
+    VkImageSubresourceRange pending_color_range;
+    VkClearDepthStencilValue pending_depth_value;
+    VkImageSubresourceRange pending_depth_range;
     cached_image_view *views;
     struct image_entry *next,*hash_next;
 } image_entry;
@@ -107,7 +113,7 @@ static VkFormat vk_format(int format) {
         [0x76]=VK_FORMAT_R32G32B32A32_SFLOAT, [0x77]=VK_FORMAT_R32G32B32A32_UINT, [0x78]=VK_FORMAT_R32G32B32A32_SINT,
     };
     if (format >= 0x79 && format <= 0x94) return VK_FORMAT_ASTC_4x4_UNORM_BLOCK + (format - 0x79) % 14 * 2 + (format >= 0x87);
-    return format > 0 && format < sizeof formats / sizeof *formats ? formats[format] : VK_FORMAT_UNDEFINED;
+    return format > 0 && (size_t)format < sizeof formats / sizeof *formats ? formats[format] : VK_FORMAT_UNDEFINED;
 }
 // 按真正的读写风险同步；连续只读与通道内同附件写入不加全局屏障。
 // Synchronize actual read/write hazards; avoid global barriers for consecutive reads or same-pass attachment writes.
@@ -116,19 +122,69 @@ static VkFormat vk_format(int format) {
 // The sampled side uses SHADER_READ_ONLY_OPTIMAL so the driver can take its read-only texture fast path;
 // writable, transfer and attachment images stay in GENERAL. Switch: read_only_layout 1 in perf.conf (default 0).
 static int image_read_only_enabled(void) {
-    static int value;static int loaded;
-    if(!loaded){loaded=1;value=perf_config_int("read_only_layout",0)?1:0;LOG("[vulkan] sampled image layout=%s",value?"SHADER_READ_ONLY_OPTIMAL":"GENERAL");}
+    static int value=-1;
+    if(value<0){
+        const char *env=getenv("DM_VK_READ_ONLY_LAYOUT");
+        value=env&&*env?(strcmp(env,"0")!=0):(perf_config_int("read_only_layout",1)!=0);
+        LOG("[vulkan] sampled image layout=%s",value?"SHADER_READ_ONLY_OPTIMAL":"GENERAL");
+    }
     return value;
 }
 static int image_wants_read_only(const image_entry *e,VkAccessFlags access) {
     if(!image_read_only_enabled())return 0;
-    if(e->attachment_seen)return 0;
+    if(e->attachment_seen||e->storage_seen)return 0;
     if(access&(VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT|VK_ACCESS_TRANSFER_WRITE_BIT|VK_ACCESS_HOST_WRITE_BIT|VK_ACCESS_MEMORY_WRITE_BIT))return 0;
     if(access&VK_ACCESS_TRANSFER_READ_BIT)return 0;   // 传输读要求 GENERAL
     if(!(access&VK_ACCESS_SHADER_READ_BIT))return 0; // 只有着色器读才用只读快路径
     return 1;
 }
+static void image_access(image_entry *e,VkPipelineStageFlags stage,VkAccessFlags access);
+static image_entry *pending_clear_images[64];
+static unsigned pending_clear_count;
+static void image_pending_clear_forget(const image_entry *e) {
+    for(unsigned i=0;i<pending_clear_count;i++)if(pending_clear_images[i]==e){
+        pending_clear_images[i]=pending_clear_images[--pending_clear_count];return;
+    }
+}
+static void image_pending_clear_track(image_entry *e) {
+    for(unsigned i=0;i<pending_clear_count;i++)if(pending_clear_images[i]==e)return;
+    if(pending_clear_count==64){
+        image_entry *oldest=pending_clear_images[0];
+        pending_clear_images[0]=pending_clear_images[--pending_clear_count];
+        if(oldest->pending_clear_color){
+            VkClearColorValue color=oldest->pending_color_value;VkImageSubresourceRange range=oldest->pending_color_range;
+            oldest->pending_clear_color=0;image_access(oldest,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+            vkCmdClearColorImage(command,oldest->image,VK_IMAGE_LAYOUT_GENERAL,&color,1,&range);
+        }
+        if(oldest->pending_clear_depth){
+            VkClearDepthStencilValue depth=oldest->pending_depth_value;VkImageSubresourceRange range=oldest->pending_depth_range;
+            oldest->pending_clear_depth=0;image_access(oldest,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+            vkCmdClearDepthStencilImage(command,oldest->image,VK_IMAGE_LAYOUT_GENERAL,&depth,1,&range);
+        }
+    }
+    pending_clear_images[pending_clear_count++]=e;
+}
+static void image_flush_pending_clear(image_entry *e) {
+    if(!e->pending_clear_color&&!e->pending_clear_depth)return;
+    int had_color=e->pending_clear_color,had_depth=e->pending_clear_depth;
+    VkClearColorValue color=e->pending_color_value;VkImageSubresourceRange color_range=e->pending_color_range;
+    VkClearDepthStencilValue depth=e->pending_depth_value;VkImageSubresourceRange depth_range=e->pending_depth_range;
+    e->pending_clear_color=0;e->pending_clear_depth=0;
+    image_pending_clear_forget(e);
+    if(had_color){
+        image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+        vkCmdClearColorImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&color,1,&color_range);
+    }
+    if(had_depth){
+        image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+        vkCmdClearDepthStencilImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&depth,1,&depth_range);
+    }
+}
+static void image_flush_all_pending_clears(void) {
+    while(pending_clear_count)image_flush_pending_clear(pending_clear_images[pending_clear_count-1]);
+}
 static void image_access(image_entry *e,VkPipelineStageFlags stage,VkAccessFlags access) {
+    if(e->pending_clear_color||e->pending_clear_depth)image_flush_pending_clear(e);
     VkAccessFlags writes=VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT|VK_ACCESS_TRANSFER_WRITE_BIT|VK_ACCESS_HOST_WRITE_BIT|VK_ACCESS_MEMORY_WRITE_BIT;
     if(graphics_image_is_attachment(e)&&stage==e->last_stage&&access==e->last_access&&(access&(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)))return;
     if(access&(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT))e->attachment_seen=1;
@@ -142,6 +198,32 @@ static void image_access(image_entry *e,VkPipelineStageFlags stage,VkAccessFlags
         if(want==VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)image_read_only_transitions++;
         e->last_stage=stage;e->last_access=access;e->layout=want;
     }else{e->last_stage|=stage;e->last_access|=access;}
+}
+static void image_access_attachments_batch(unsigned count,image_entry *const *images,unsigned depth_index) {
+    VkAccessFlags writes=VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT|VK_ACCESS_TRANSFER_WRITE_BIT|VK_ACCESS_HOST_WRITE_BIT|VK_ACCESS_MEMORY_WRITE_BIT;
+    VkImageMemoryBarrier barriers[9];unsigned nb=0;
+    VkPipelineStageFlags src_stages=0,dst_stages=0;
+    for(unsigned i=0;i<count;i++){
+        image_entry *e=images[i];
+        if(e->pending_clear_color||e->pending_clear_depth)image_flush_pending_clear(e);
+        int duplicate=0;for(unsigned j=0;j<i;j++)if(images[j]==e){duplicate=1;break;}
+        if(duplicate)continue;
+        VkPipelineStageFlags stage=i==depth_index?(VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT):VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkAccessFlags access=i==depth_index?(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT):(VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        e->attachment_seen=1;
+        int hazard=e->last_access&&((e->last_access|access)&writes);
+        int relayout=e->layout!=VK_IMAGE_LAYOUT_GENERAL;
+        if(hazard||relayout){
+            barriers[nb++]=(VkImageMemoryBarrier){.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,.srcAccessMask=e->last_access,.dstAccessMask=access,.oldLayout=e->layout,.newLayout=VK_IMAGE_LAYOUT_GENERAL,.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.image=e->image,.subresourceRange={e->aspect,0,e->texture.d.levels,0,e->texture.L.layers}};
+            src_stages|=e->last_stage?e->last_stage:VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;dst_stages|=stage;
+            e->last_stage=stage;e->last_access=access;e->layout=VK_IMAGE_LAYOUT_GENERAL;
+        }else{e->last_stage|=stage;e->last_access|=access;}
+    }
+    if(nb){
+        graphics_pass_end();
+        vkCmdPipelineBarrier(command,src_stages,dst_stages,0,0,NULL,0,NULL,nb,barriers);
+        image_barriers+=nb;
+    }
 }
 static uint32_t dimension(uint32_t v, unsigned level) { v >>= level; return v ? v : 1; }
 static image_entry *image_get(const tex_t *t) {
@@ -304,12 +386,24 @@ static void clear_color(const p_clear_color *c) {
     // 非完整剪裁必须保留未覆盖像素；不能用整张清除替代。
     // A partial scissor must preserve uncovered pixels; never substitute a whole-image clear.
     if(state.scissor.w>0&&(state.scissor.x||state.scissor.y||state.scissor.w<(int)dimension(e->texture.d.width,r.baseMipLevel)||state.scissor.h<(int)dimension(e->texture.d.height,r.baseMipLevel)))die("Vulkan scissored clear pending");
-    graphics_pass_end();VkClearColorValue color;memcpy(color.float32,c->rgba,sizeof c->rgba);image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);vkCmdClearColorImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&color,1,&r);image_gpu_written(e);
+    graphics_pass_end();VkClearColorValue color;memcpy(color.float32,c->rgba,sizeof c->rgba);
+    if(r.levelCount==1&&r.layerCount==1&&r.aspectMask==e->aspect){
+        if(e->pending_clear_color&&memcmp(&e->pending_color_range,&r,sizeof r))image_flush_pending_clear(e);
+        e->pending_clear_color=1;e->pending_color_value=color;e->pending_color_range=r;
+        image_pending_clear_track(e);image_gpu_written(e);e->attachment_seen=1;return;
+    }
+    image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);vkCmdClearColorImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&color,1,&r);image_gpu_written(e);
 }
 static void clear_depth(const p_clear_ds *c) {
     if(!state.rt.depth)return;image_entry *e=image_get(state.rt.depth);VkImageSubresourceRange r=texture_range(e,state.rt.has_dview?&state.rt.dview:NULL);r.aspectMask=0;
     if(c->depth_mask)r.aspectMask|=VK_IMAGE_ASPECT_DEPTH_BIT;if(c->stencil_mask){if(c->stencil_mask!=255)die("Vulkan partial stencil clear pending");r.aspectMask|=VK_IMAGE_ASPECT_STENCIL_BIT;}
-    r.aspectMask&=e->aspect;if(!r.aspectMask)return;graphics_pass_end();VkClearDepthStencilValue value={c->depth,c->stencil};image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);vkCmdClearDepthStencilImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&value,1,&r);image_gpu_written(e);
+    r.aspectMask&=e->aspect;if(!r.aspectMask)return;graphics_pass_end();VkClearDepthStencilValue value={c->depth,c->stencil};
+    if(r.levelCount==1&&r.layerCount==1&&r.aspectMask==e->aspect){
+        if(e->pending_clear_depth&&memcmp(&e->pending_depth_range,&r,sizeof r))image_flush_pending_clear(e);
+        e->pending_clear_depth=1;e->pending_depth_value=value;e->pending_depth_range=r;
+        image_pending_clear_track(e);image_gpu_written(e);e->attachment_seen=1;return;
+    }
+    image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);vkCmdClearDepthStencilImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&value,1,&r);image_gpu_written(e);
 }
 static void copy_buffer_texture(const p_copy_b2t *c) {
     if(c->r.width<=0||c->r.height<=0||c->r.depth<=0)return;
@@ -422,7 +516,7 @@ void mtl_reg_samp(int id,const samp_par *p) {
 }
 void mtl_tex_release(tex_t *t) {
     if(!device)return;mtl_finish();pthread_mutex_lock(&queue_lock);image_entry **link=&image_list;while(*link&&(*link)->serial!=t->serial)link=&(*link)->next;
-    if(*link){image_entry *e=*link;graphics_cache_forget_image(e);*link=e->next;image_entry **hash=&image_index[e->serial&4095];while(*hash&&*hash!=e)hash=&(*hash)->hash_next;if(!*hash)die("Vulkan image index corruption");*hash=e->hash_next;while(e->views){cached_image_view *v=e->views;e->views=v->next;vkDestroyImageView(device,v->view,NULL);free(v);}vkDestroyImageView(device,e->view,NULL);vkDestroyImage(device,e->image,NULL);vkFreeMemory(device,e->memory,NULL);free(e);}pthread_mutex_unlock(&queue_lock);
+    if(*link){image_entry *e=*link;image_pending_clear_forget(e);graphics_cache_forget_image(e);*link=e->next;image_entry **hash=&image_index[e->serial&4095];while(*hash&&*hash!=e)hash=&(*hash)->hash_next;if(!*hash)die("Vulkan image index corruption");*hash=e->hash_next;while(e->views){cached_image_view *v=e->views;e->views=v->next;vkDestroyImageView(device,v->view,NULL);free(v);}vkDestroyImageView(device,e->view,NULL);vkDestroyImage(device,e->image,NULL);vkFreeMemory(device,e->memory,NULL);free(e);}pthread_mutex_unlock(&queue_lock);
 }
 void mtl_read_texels(const tex_t *t,unsigned level,unsigned layer,const NVNcopyRegion *r,uint8_t *dst,size_t row,size_t img) {
     if(r->width<=0||r->height<=0||r->depth<=0)return;mtl_sub_begin();dependencies_prepare_texture(t);image_entry *e=image_get(t);image_upload(e);

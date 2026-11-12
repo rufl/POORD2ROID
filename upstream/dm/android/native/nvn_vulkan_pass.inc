@@ -89,9 +89,9 @@ static void graphics_pass_end(void) {
     vkCmdEndQuery(command,draw_queries,graphics_active_query);post_new(5)->value=graphics_active_query;
     vkCmdEndRenderPass(command);graphics_active_frame=NULL;
 }
-static void graphics_pass_begin(graphics_frame_entry *frame) {
+static void graphics_pass_begin(graphics_frame_entry *frame,const VkClearValue *clear_values,uint32_t clear_count) {
     if(graphics_active_frame==frame)return;graphics_pass_end();
-    VkRenderPassBeginInfo info={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,.renderPass=frame->key.pass->pass,.framebuffer=frame->frame,.renderArea={{0,0},{frame->key.width,frame->key.height}}};
+    VkRenderPassBeginInfo info={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,.renderPass=frame->key.pass->pass,.framebuffer=frame->frame,.renderArea={{0,0},{frame->key.width,frame->key.height}},.clearValueCount=clear_count,.pClearValues=clear_values};
     if(used_queries>=1024)die("Vulkan occlusion batch capacity");graphics_active_query=used_queries++;
     // Reset only the query about to be used. Its async slot is fence-retired before reuse.
     // 仅重置即将使用的查询；异步槽位只有在 fence 完成后才会复用。

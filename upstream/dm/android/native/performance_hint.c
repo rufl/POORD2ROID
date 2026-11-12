@@ -26,7 +26,8 @@ static hint_api api;
 static pthread_once_t load_once=PTHREAD_ONCE_INIT;
 static pthread_mutex_t hint_lock=PTHREAD_MUTEX_INITIALIZER;
 static APerformanceHintSession *session;
-static int available,attempted,reported;
+static int available,attempted,reported,hal_unsupported;
+static unsigned create_failures;
 static uint64_t retry_after_cycle;
 static uint32_t retry_delay_cycles=60;
 static int32_t bound_tid;
@@ -69,11 +70,11 @@ static void load_api(void) {
 
 void dm_android_performance_frame_begin(const void *window,int index) {
     pthread_once(&load_once,load_api);
-    if(!available)return;
+    if(!available||hal_unsupported)return;
     pthread_mutex_lock(&hint_lock);
     // 重复 acquire 不能覆盖起点；等下次 present 丢弃歧义周期后再恢复。
     // Repeated acquire cannot overwrite the start; discard the ambiguous cycle at present, then recover.
-    if(!paused){
+    if(!paused&&!hal_unsupported){
         if(cycle_pending)cycle_invalid=1;
         else {
             cycle_pending=1;cycle_window=window;cycle_index=index;cycle_tid=gettid();cycle_start=monotonic_ns();cycle_wsi=0;
@@ -93,20 +94,31 @@ void dm_android_performance_wsi_calls(uint64_t duration_ns) {
 }
 
 static void session_create_locked(int32_t tid) {
-    if(attempted||cycles<retry_after_cycle)return;
+    if(attempted||hal_unsupported||cycles<retry_after_cycle)return;
     APerformanceHintManager *manager=api.manager();
-    if(manager)session=api.create(manager,&tid,1,target_ns);
+    int64_t preferred=manager&&api.preferred_rate?api.preferred_rate(manager):-1;
+    if(!manager||(api.preferred_rate&&preferred<=0)){
+        hal_unsupported=1;
+        fprintf(stderr,"[dm] [adpf] unavailable on device HAL (manager=%d tid=%d preferred_ns=%lld); disabling ADPF hints\n",
+                manager!=NULL,tid,(long long)preferred);
+        return;
+    }
+    session=api.create(manager,&tid,1,target_ns);
     if(session){
-        attempted=1;retry_after_cycle=0;retry_delay_cycles=60;
+        attempted=1;create_failures=0;retry_after_cycle=0;retry_delay_cycles=60;
         bound_tid=tid;
-        int64_t preferred=api.preferred_rate?api.preferred_rate(manager):-1;
         fprintf(stderr,"[dm] [adpf] session created tid=%d target_ns=%lld preferred_ns=%lld\n",bound_tid,(long long)target_ns,(long long)preferred);
         __android_log_print(ANDROID_LOG_INFO,"D2R","[adpf] session tid=%d target=%.3f ms preferred_report=%.3f ms",bound_tid,target_ns/1e6,preferred<0?-1:preferred/1e6);
+    }else if(++create_failures>=3){
+        hal_unsupported=1;
+        fprintf(stderr,"[dm] [adpf] session creation rejected %u times (tid=%d preferred_ns=%lld); disabling ADPF hints\n",
+                create_failures,tid,(long long)preferred);
     }else {
         uint32_t delay=retry_delay_cycles;
         retry_after_cycle=cycles+delay;
         retry_delay_cycles=delay<1800?delay*2:3600;
-        fprintf(stderr,"[dm] [adpf] session creation failed manager=%d tid=%d retry_after_cycle=%llu\n",manager!=NULL,tid,(unsigned long long)retry_after_cycle);
+        fprintf(stderr,"[dm] [adpf] session creation failed manager=%d tid=%d preferred_ns=%lld retry_after_cycle=%llu\n",
+                manager!=NULL,tid,(long long)preferred,(unsigned long long)retry_after_cycle);
         __android_log_print(ANDROID_LOG_INFO,"D2R","[adpf] session creation failed; retry in %u valid frame cycles",delay);
     }
 }
@@ -133,7 +145,7 @@ void dm_android_performance_frame_end(const void *window,int index) {
     uint64_t ended=monotonic_ns();int32_t tid=gettid();
     pthread_once(&load_once,load_api);
     pthread_mutex_lock(&hint_lock);
-    if(paused||!available){cycle_clear();pthread_mutex_unlock(&hint_lock);return;}
+    if(paused||!available||hal_unsupported){cycle_clear();pthread_mutex_unlock(&hint_lock);return;}
     uint64_t elapsed=ended>=cycle_start?ended-cycle_start:0;
     int valid=cycle_pending&&!cycle_invalid&&cycle_window==window&&cycle_index==index&&cycle_tid==tid&&elapsed>cycle_wsi;
     uint64_t work_ns=valid?elapsed-cycle_wsi:0,wsi_ns=cycle_wsi;
@@ -150,7 +162,9 @@ void dm_android_performance_frame_end(const void *window,int index) {
             api.close(session);session=NULL;bound_tid=0;
         }
     }else skipped++;
-    if(cycles==1||!(cycles%120))fprintf(stderr,"[dm] [adpf-cycle] cycles=%llu accepted=%llu skipped=%llu caller_tid=%d bound_tid=%d last_work_ns=%llu last_wsi_calls_ns=%llu accepted_mean_ms=%.3f excluded_wsi_mean_ms=%.3f target_ns=%lld clock=monotonic dependency_wait_included=1 worker_not_added=1\n",(unsigned long long)cycles,(unsigned long long)accepted,(unsigned long long)skipped,tid,bound_tid,(unsigned long long)(valid?work_ns:0),(unsigned long long)wsi_ns,accepted?work_total/(accepted*1e6):0,accepted?wsi_total/(accepted*1e6):0,(long long)target_ns);
+    static int diag_env=-1;
+    if(diag_env<0){const char *e=getenv("DM_VK_DIAG");diag_env=e&&*e&&strcmp(e,"0")!=0;}
+    if(diag_env&&(cycles==1||!(cycles%120)))fprintf(stderr,"[dm] [adpf-cycle] cycles=%llu accepted=%llu skipped=%llu caller_tid=%d bound_tid=%d last_work_ns=%llu last_wsi_calls_ns=%llu accepted_mean_ms=%.3f excluded_wsi_mean_ms=%.3f target_ns=%lld clock=monotonic dependency_wait_included=1 worker_not_added=1\n",(unsigned long long)cycles,(unsigned long long)accepted,(unsigned long long)skipped,tid,bound_tid,(unsigned long long)(valid?work_ns:0),(unsigned long long)wsi_ns,accepted?work_total/(accepted*1e6):0,accepted?wsi_total/(accepted*1e6):0,(long long)target_ns);
     pthread_mutex_unlock(&hint_lock);
 }
 
@@ -158,6 +172,7 @@ void dm_android_performance_close(void) {
     pthread_mutex_lock(&hint_lock);
     if(session){api.close(session);session=NULL;}
     bound_tid=0;attempted=0;reported=0;retry_after_cycle=0;retry_delay_cycles=60;
+    create_failures=0;
     paused=1;cycle_clear();accepted=skipped=cycles=work_total=wsi_total=0;
     pthread_mutex_unlock(&hint_lock);
 }

@@ -55,7 +55,7 @@ static void write_bytes(const void *text, size_t length) {
 static void write_config(const char *text) { write_bytes(text, strlen(text)); }
 
 static dm_android_launch_settings apply_ok(const char *directory) {
-    dm_android_launch_settings result = {-99, -99, -99, -99, -99, -99, -99, -99};
+    dm_android_launch_settings result = {-99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -99};
     char error[512] = "stale error";
     assert(dm_android_launch_settings_apply(directory, &result, error, sizeof error));
     assert(!error[0]);
@@ -65,11 +65,11 @@ static dm_android_launch_settings apply_ok(const char *directory) {
 static void expect_bad(const char *text, const char *message) {
     reset_environment();
     write_config(text);
-    dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23, 24};
+    dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
     char error[512];
     assert(!dm_android_launch_settings_apply(temporary, &result, error, sizeof error));
     assert(strstr(error, message));
-    assert(result.present == 17 && result.operation_mode == 18 && result.input_receipts == 19 && result.debug_overlay == 20 && result.resolution_width == 21 && result.resolution_height == 22 && result.present_hz == 23 && result.font_large == 24);
+    assert(result.present == 17 && result.operation_mode == 18 && result.input_receipts == 19 && result.debug_overlay == 20 && result.resolution_width == 21 && result.resolution_height == 22 && result.present_hz == 23 && result.font_large == 24 && result.quality_preset == 25 && result.auto_min == 26 && result.auto_max == 27 && result.diagnostics == 28);
     expect_env("DM_FONT_LARGE", "old-font-level");
     expect_env("DM_OPMODE", "old-operation-mode");
     expect_env("DM_HID_RECEIPT_LOG", "old-receipt-path");
@@ -81,12 +81,12 @@ static void expect_bad(const char *text, const char *message) {
 static void missing_defaults(void) {
     reset_environment();
     dm_android_launch_settings result = apply_ok(temporary);
-    assert(!result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1);
+    assert(!result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1 && result.font_large == -1 && result.quality_preset == -1 && result.auto_min == -1 && result.auto_max == -1 && result.diagnostics == -1);
     expect_env("DM_OPMODE", "old-operation-mode"); expect_env("DM_HID_RECEIPT_LOG", "old-receipt-path");
     tests++;
     assert(!unsetenv("DM_OPMODE") && !unsetenv("DM_HID_RECEIPT_LOG"));
     result = apply_ok(temporary);
-    assert(!result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1);
+    assert(!result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1 && result.font_large == -1 && result.quality_preset == -1 && result.auto_min == -1 && result.auto_max == -1 && result.diagnostics == -1);
     expect_env("DM_OPMODE", NULL); expect_env("DM_HID_RECEIPT_LOG", NULL);
     tests++;
 }
@@ -94,7 +94,7 @@ static void missing_defaults(void) {
 static void valid_settings(void) {
     reset_environment(); write_config("");
     dm_android_launch_settings result = apply_ok(temporary);
-    assert(result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1);
+    assert(result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1 && result.font_large == -1 && result.quality_preset == -1 && result.auto_min == -1 && result.auto_max == -1 && result.diagnostics == -1);
     expect_env("DM_OPMODE", "old-operation-mode"); expect_env("DM_HID_RECEIPT_LOG", "old-receipt-path");
     tests++;
 
@@ -113,14 +113,15 @@ static void valid_settings(void) {
     expect_env("DM_OPMODE", "1"); expect_env("DM_HID_RECEIPT_LOG", NULL);
     tests++;
 
+    // Font selection is boot-only overlay selection; the parser reports it but never exports a runtime toggle.
     reset_environment(); write_config("font_large=1\n");
     result = apply_ok(temporary);
     assert(result.font_large == 1);
-    expect_env("DM_FONT_LARGE", "1");
+    expect_env("DM_FONT_LARGE", "old-font-level");
     write_config("font_large=0\n");
     result = apply_ok(temporary);
     assert(result.font_large == 0);
-    expect_env("DM_FONT_LARGE", "0");
+    expect_env("DM_FONT_LARGE", "old-font-level");
     tests++;
 
     reset_environment(); write_config("operation_mode=handheld\n");
@@ -143,7 +144,7 @@ static void valid_settings(void) {
 
     reset_environment(); write_config("# comment\n\t \r\n");
     result = apply_ok(temporary);
-    assert(result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1);
+    assert(result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1 && result.font_large == -1 && result.quality_preset == -1 && result.auto_min == -1 && result.auto_max == -1 && result.diagnostics == -1);
     expect_env("DM_OPMODE", "old-operation-mode"); expect_env("DM_HID_RECEIPT_LOG", "old-receipt-path");
     tests++;
 
@@ -257,6 +258,42 @@ static void present_hz_settings(void) {
     expect_bad("present_hz=0\npresent_hz=60\n", "duplicate launch settings key on line 2");
 }
 
+static void quality_preset_settings(void) {
+    reset_environment(); write_config("quality_preset=2\n");
+    dm_android_launch_settings result = apply_ok(temporary);
+    assert(result.quality_preset == 2);
+    tests++;
+    reset_environment(); write_config("quality_preset=-1\n");
+    result = apply_ok(temporary);
+    assert(result.quality_preset == -1);
+    tests++;
+    // Per-mode independent profiles and migration fallback from unprefixed legacy keys.
+    reset_environment();
+    write_config("operation_mode=handheld\nquality_preset=0\npresent_hz=60\nhandheld_quality_preset=2\nhandheld_present_hz=40\nhandheld_auto_min=60\nhandheld_auto_max=85\nconsole_quality_preset=1\nconsole_present_hz=30\nconsole_auto_min=70\nconsole_auto_max=100\ndiagnostics=1\n");
+    result = apply_ok(temporary);
+    assert(result.operation_mode == 0 && result.quality_preset == 2 && result.present_hz == 40 && result.auto_min == 60 && result.auto_max == 85 && result.diagnostics == 1);
+    tests++;
+    reset_environment();
+    write_config("operation_mode=console\nquality_preset=0\npresent_hz=60\nhandheld_quality_preset=2\nhandheld_present_hz=40\nhandheld_auto_min=60\nhandheld_auto_max=85\nconsole_quality_preset=1\nconsole_present_hz=30\nconsole_auto_min=70\nconsole_auto_max=100\ndiagnostics=0\n");
+    result = apply_ok(temporary);
+    assert(result.operation_mode == 1 && result.quality_preset == 1 && result.present_hz == 30 && result.auto_min == 70 && result.auto_max == 100 && result.diagnostics == 0);
+    tests++;
+    reset_environment();
+    write_config("operation_mode=console\nquality_preset=2\npresent_hz=40\nhandheld_quality_preset=3\n");
+    result = apply_ok(temporary);
+    assert(result.operation_mode == 1 && result.quality_preset == 2 && result.present_hz == 40);
+    tests++;
+    expect_bad("quality_preset=4\n", "quality_preset must be -1 or 0-3");
+    expect_bad("quality_preset=-2\n", "quality_preset must be -1 or 0-3");
+    expect_bad("quality_preset=1x\n", "quality_preset must be -1 or 0-3");
+    expect_bad("quality_preset=1\nquality_preset=2\n", "duplicate launch settings key on line 2");
+    expect_bad("handheld_auto_min=49\n", "Auto bounds must be 50-100");
+    expect_bad("console_auto_max=101\n", "Auto bounds must be 50-100");
+    expect_bad("handheld_auto_min=90\nhandheld_auto_max=70\n", "Auto minimum exceeds maximum for profile 0");
+    expect_bad("handheld_operation_mode=handheld\n", "invalid profile key on line 1");
+    expect_bad("diagnostics=2\n", "diagnostics must be 0 or 1");
+}
+
 static void malformed_settings(void) {
     expect_bad("operation_mode=handheld\nDM_VK_SHADERS=/tmp/fake\n", "unknown launch settings key on line 2");
     expect_bad("input_receipts=1\noperation_mode=handheld\noperation_mode=console\n", "duplicate launch settings key on line 3");
@@ -267,6 +304,7 @@ static void malformed_settings(void) {
     expect_bad("font_large=2\n", "font_large must be 0 or 1");
     expect_bad("operation_mode=console\nfont_large=\n", "font_large must be 0 or 1");
     expect_bad("operation_mode=console\ninput_receipts=2\n", "input_receipts must be 0 or 1");
+    expect_bad("quality_preset=\n", "quality_preset must be -1 or 0-3");
     expect_bad("operation_mode=console\ninput_receipts=\n", "input_receipts must be 0 or 1");
     expect_bad("operation_mode=handheld\ninput_receipts\n", "line 2 requires key=value");
     expect_bad("operation_mode=handheld\n=1\n", "unknown launch settings key on line 2");
@@ -289,7 +327,7 @@ static void size_limits(void) {
     memset(content, 'x', 256); content[0] = '#'; content[256] = 0;
     reset_environment(); write_config(content);
     dm_android_launch_settings result = apply_ok(temporary);
-    assert(result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1);
+    assert(result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1 && result.font_large == -1 && result.quality_preset == -1 && result.auto_min == -1 && result.auto_max == -1 && result.diagnostics == -1);
     expect_env("DM_OPMODE", "old-operation-mode"); expect_env("DM_HID_RECEIPT_LOG", "old-receipt-path");
     tests++;
 
@@ -299,7 +337,7 @@ static void size_limits(void) {
 
     memset(content, '\n', 4096); content[4096] = 0;
     reset_environment(); write_config(content); result = apply_ok(temporary);
-    assert(result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1);
+    assert(result.present && result.operation_mode == -1 && result.input_receipts == -1 && result.debug_overlay == -1 && result.resolution_width == -1 && result.resolution_height == -1 && result.present_hz == -1 && result.font_large == -1 && result.quality_preset == -1 && result.auto_min == -1 && result.auto_max == -1 && result.diagnostics == -1);
     expect_env("DM_OPMODE", "old-operation-mode"); expect_env("DM_HID_RECEIPT_LOG", "old-receipt-path");
     tests++;
 
@@ -309,10 +347,10 @@ static void size_limits(void) {
     reset_environment();
     const char nul_content[] = "operation_mode=handheld\n\0input_receipts=1\n";
     write_bytes(nul_content, sizeof nul_content - 1);
-    result = (dm_android_launch_settings){17, 18, 19, 20, 21, 22, 23, 24}; char error[512];
+    result = (dm_android_launch_settings){17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28}; char error[512];
     assert(!dm_android_launch_settings_apply(temporary, &result, error, sizeof error));
     assert(strstr(error, "NUL byte") && result.present == 17 && result.operation_mode == 18 && result.input_receipts == 19
-           && result.debug_overlay == 20 && result.resolution_width == 21 && result.resolution_height == 22 && result.present_hz == 23);
+           && result.debug_overlay == 20 && result.resolution_width == 21 && result.resolution_height == 22 && result.present_hz == 23 && result.font_large == 24 && result.quality_preset == 25 && result.auto_min == 26 && result.auto_max == 27 && result.diagnostics == 28);
     expect_env("DM_OPMODE", "old-operation-mode"); expect_env("DM_HID_RECEIPT_LOG", "old-receipt-path");
     tests++;
 }
@@ -322,11 +360,11 @@ static void invalid_paths(void) {
     char error[512];
     reset_environment();
     for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
-        dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23, 24};
+        dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
         assert(!dm_android_launch_settings_apply(paths[i], &result, error, sizeof error));
         assert(strstr(error, "absolute application temp directory") && result.present == 17 && result.operation_mode == 18
                && result.input_receipts == 19 && result.debug_overlay == 20 && result.resolution_width == 21
-               && result.resolution_height == 22 && result.present_hz == 23);
+               && result.resolution_height == 22 && result.present_hz == 23 && result.font_large == 24 && result.quality_preset == 25 && result.auto_min == 26 && result.auto_max == 27 && result.diagnostics == 28);
         expect_env("DM_OPMODE", "old-operation-mode"); expect_env("DM_HID_RECEIPT_LOG", "old-receipt-path");
         tests++;
     }
@@ -368,12 +406,12 @@ static void environment_failures(void) {
             // 精确让第二项环境写失败；旧值存在和不存在都必须恢复，result 不发布。
             // Fail precisely the second environment write; restore both present and absent old values, and do not publish result.
             environment_writes = 0; fail_write_mask = 1u << 2;
-            dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23, 24};
+            dm_android_launch_settings result = {17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
             assert(!dm_android_launch_settings_apply(temporary, &result, error, sizeof error));
             fail_write_mask = 0;
             assert(strstr(error, "previous environment restored"));
             assert(result.present == 17 && result.operation_mode == 18 && result.input_receipts == 19 && result.debug_overlay == 20
-                   && result.resolution_width == 21 && result.resolution_height == 22 && result.present_hz == 23);
+                   && result.resolution_width == 21 && result.resolution_height == 22 && result.present_hz == 23 && result.font_large == 24 && result.quality_preset == 25 && result.auto_min == 26 && result.auto_max == 27 && result.diagnostics == 28);
             expect_env("DM_OPMODE", absent ? NULL : "old-operation-mode");
             expect_env("DM_HID_RECEIPT_LOG", absent ? NULL : "old-receipt-path");
             tests++;
@@ -405,7 +443,7 @@ int main(int argc, char **argv) {
     assert(mkdtemp(temporary));
     n = snprintf(config_path, sizeof config_path, "%s/launch-settings.conf", temporary); assert(n > 0 && n < (int)sizeof config_path);
     n = snprintf(receipt_path, sizeof receipt_path, "%s/input-receipts.jsonl", temporary); assert(n > 0 && n < (int)sizeof receipt_path);
-    missing_defaults(); valid_settings(); overlay_settings(); resolution_settings(); present_hz_settings(); malformed_settings(); size_limits(); invalid_paths();
+    missing_defaults(); valid_settings(); overlay_settings(); resolution_settings(); present_hz_settings(); quality_preset_settings(); malformed_settings(); size_limits(); invalid_paths();
 #ifdef DM_LAUNCH_SETTINGS_TEST_WRAP_ENV
     environment_failures();
 #endif

@@ -14,7 +14,10 @@ typedef struct dm_android_launch_settings {
     int debug_overlay; /* -1 未指定，0 关闭，1 开启 | -1 unspecified, 0 hidden, 1 shown */
     int resolution_width, resolution_height; /* -1 未指定；否则为出图分辨率（主机档，掌机档按 0.8 同比例）| -1 unspecified; otherwise the output resolution (docked; handheld scales by 0.8) */
     int present_hz; /* -1 未指定；0 跟随屏幕最高刷新率；否则为固定的出图帧率（24–240 Hz）| -1 unspecified; 0 follow the screen's maximum refresh rate; otherwise a fixed present rate (24-240 Hz) */
-    int font_large; /* -1 unspecified, 0 native normal font, 1 native low-vision large font */
+    int font_large; /* -1 unspecified, 0 normal Android overlay profile, 1 1.725x Android overlay profile */
+    int quality_preset; /* -1 automatic, 0 high, 1 balanced, 2 performance, 3 ultra */
+    int auto_min, auto_max; /* percent, 50-100; -1 unspecified */
+    int diagnostics; /* -1 unspecified, 0 disabled, 1 enabled */
 } dm_android_launch_settings;
 
 // 在 boot 设置 DM_TEMP 后、其他线程首次读取运行模式/输入日志前调用；不是运行中切换接口。

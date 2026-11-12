@@ -32,4 +32,26 @@ with tempfile.TemporaryDirectory() as directory:
             library.dm_android_sha256_update(ctypes.byref(context), chunk, len(chunk))
         library.dm_android_sha256_final(result, ctypes.byref(context))
         assert result.raw == hashlib.sha256(data).digest(), ("sha256", n)
+import sys
+sys.path.insert(0, str(ROOT / "tools"))
+import build_shaders
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    work = root / "work"
+    out = root / "spirv"
+    work.mkdir(); out.mkdir()
+    jobs = [{"key": "0123456789abcdef", "reduced": False, "host_subgroup_size": 16}]
+    build_shaders.record_build_config(work, out, jobs, "full")
+    (out / "0123456789abcdef.spv").write_bytes(b"\x03\x02\x23\x07\x00")
+    (out / "0123456789abcdef.meta").write_bytes(b"DMVK")
+    d1, c1 = build_shaders.shader_output_digest(out)
+    assert c1 == 1
+    try:
+        build_shaders.record_build_config(work, out, [dict(jobs[0], reduced=True)], "reduced")
+        raise AssertionError("expected precision mismatch rejection")
+    except ValueError:
+        pass
+    (out / "0123456789abcdef.spv").write_bytes(b"\x03\x02\x23\x07\x01")
+    d2, c2 = build_shaders.shader_output_digest(out)
+    assert c2 == 1 and d1 != d2
 print("Resource digests: PASS (36 reference comparisons)")

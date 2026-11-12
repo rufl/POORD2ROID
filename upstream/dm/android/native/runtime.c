@@ -124,7 +124,7 @@ dm_android_context *dm_android_thread_init(void *gate) {
     context->slots[DM_KGATE] = (uintptr_t)gate;
     context->slots[DM_KRES0] = ((uint64_t)720 << 32) | 1280;
     context->slots[DM_KRES1] = ((uint64_t)900 << 32) | 1600;
-    float aspect = 19.0f / 9.0f;
+    float aspect = 20.0f / 9.0f;
     uint32_t bits;
     memcpy(&bits, &aspect, sizeof bits);
     context->slots[DM_KASPECT] = context->slots[DM_KASPECTUI] = bits;

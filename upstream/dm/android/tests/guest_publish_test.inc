@@ -43,7 +43,7 @@ static void guest_publish_partial_reference_test(void) {
     int tail_fired=reference_gate_watchdog_stop(&watchdog[1]);assert(!control.fired&&!tail_fired);
     assert(result.queued_ticket==produced+1&&result.required_ticket==produced&&result.gap==1);assert(control.observed.required_ticket==produced&&!recording);
     assert(mtl_wait(produced,0)&&!mtl_wait(result.queued_ticket,0));assert(!memcmp(guest,green,sizeof guest)&&event==73);assert(atomic_load(&retained.owner->references)==1);
-    pthread_mutex_lock(&buffer_cache_lock);for(cached_buffer *entry=buffer_cache;entry;entry=entry->next)assert(entry->buffer.buffer!=retained.buffer);pthread_mutex_unlock(&buffer_cache_lock);
+    assert(!buffer_cache_contains(retained.buffer));
     // 已完成 guest producer 后，pure GPU consumer 的引用仍保留 backing，直到它自己的真实 fence。
     // The pure GPU consumer retains the backing after guest publication until its own real fence completes.
     guest_publish_result again=guest_publish_wait(produced);assert(again.required_ticket==produced&&again.gap==1&&!mtl_wait(again.queued_ticket,0));reference_gate_signal(gates[1],1);assert(mtl_wait(result.queued_ticket,5000000000ull));

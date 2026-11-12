@@ -1,8 +1,8 @@
 # Android 可复现启动设置
 
-此模块只读取本应用 temp 目录中的 `launch-settings.conf`，用于在同一 APK 中选择已有掌机/主机运行档，以及收集游戏实际取到的手柄状态。它不改变游戏时钟、帧率、驱动、着色器精度或验证开关。
+此模块只读取本应用 temp 目录中的 `launch-settings.conf`，用于在同一 APK 中选择已有掌机/主机运行档、出图节拍、分辨率、调试浮层、字体 overlay 档位和 3D 画质档。它只接受固定白名单，不提供任意环境变量、驱动、着色器精度或验证开关入口。
 
-实现为 `dm/android/native/launch_settings.c/.h`，独立测试为 `dm/android/tests/launch_settings_test.c`。根智能体已审核并接入 `DM_TEMP` 设置后的启动位置及宿主源码列表，完整 APK 构建安装成功。Host及Android同App UID普通34项/环境故障40项均真实exit0；保留真实FIFO负例，不跳检查。掌机档营地主颜色/深度/UI目标实际1280×720，截图20.0FPS，游戏HID取样文件也已实测生成。
+实现为 `dm/android/native/launch_settings.c/.h`，独立测试为 `dm/android/tests/launch_settings_test.c`。解析器在 `DM_TEMP` 就绪后、游戏首次读取运行档与输入前调用；非法文件或值会停止启动，不半应用环境变更。
 
 ## 配置与缺省行为
 
@@ -18,6 +18,11 @@ input_receipts=1
 | --- | --- | --- |
 | `operation_mode` | `handheld` / `console` | 设置现有 `DM_OPMODE=0` / `DM_OPMODE=1` |
 | `input_receipts` | `0` / `1` | `0` 清除 `DM_HID_RECEIPT_LOG`；`1` 将其设置为调用方 temp 中固定的 `input-receipts.jsonl` |
+| `debug_overlay` | `0` / `1` | 设置 `DM_DEBUG_OVERLAY` |
+| `resolution` | `320..7680`×`240..4320` | 设置 `DM_GAME_RES=<宽>x<高>` |
+| `present_hz` | `0` 或 `24..240` | `0` 表示跟随屏幕；结果由前端转换成 present 节拍 |
+| `font_large` | `0` / `1` | 仅返回启动选择；0 为普通、1 为大字号完整 Android overlay，缺失时前端选大字号 |
+| `quality_preset` | `-1` 或 `0..3` | 仅返回启动选择；分别为自动、高、平衡、性能、超性能，前端在启动客体前应用 |
 
 没有文件、空文件或只含注释的文件不改变已有环境。省略一个键时保留该键此前的环境设置；只有显式 `input_receipts=0` 会关闭已有取样。模块不提前创建输入日志，也不产生测试按键。
 
@@ -49,9 +54,9 @@ LOG("[android] launch configuration present=%d operation_mode=%d input_receipts=
     launch.present, launch.operation_mode, launch.input_receipts);
 ```
 
-返回 1 表示成功，缺文件也成功；返回 0 必须停止启动并报告错误。成功结构中的 `present=0` 表示缺文件，两个设置字段为 `-1` 表示未指定、保持原设置。这些字段是本次解析结果，不是实际 GPU 分辨率或完整有效配置的证明。
+返回 1 表示成功，缺文件也成功；返回 0 必须停止启动并报告错误。成功结构中的 `present=0` 表示缺文件；各个 `-1` 字段表示未指定。这些字段是本次解析结果，不是实际 GPU 分辨率或完整有效配置的证明。
 
-全部内容和所需路径验证完成后才写环境。写入前保存两项旧值；某次环境写入失败时恢复已写项。libc 没有跨变量的原子事务，极端内存不足可能导致恢复也失败，此时错误明确包含 `environment rollback also failed; ... abort startup`，调用方必须终止，不能继续运行或声称已恢复。接口只供启动阶段单一调用方使用，不承诺与其他线程并发修改环境的原子性。
+全部内容和所需路径验证完成后才写环境。写入前保存所有受影响的旧值；某次环境写入失败时恢复已写项。libc 没有跨变量的原子事务，极端内存不足可能导致恢复也失败，此时错误明确包含 `environment rollback also failed; ... abort startup`，调用方必须终止，不能继续运行或声称已恢复。接口只供启动阶段单一调用方使用，不承诺与其他线程并发修改环境的原子性。
 
 ## 输入日志的真实含义
 

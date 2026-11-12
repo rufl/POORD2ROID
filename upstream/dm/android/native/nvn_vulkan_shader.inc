@@ -4,14 +4,11 @@ typedef struct { VkDescriptorType type; uint32_t offset; int storage_slot,unifor
 typedef struct shader_entry {
     char key[17]; uint32_t stage,set,count,c1_size,attributes[32];
     shader_binding *bindings; uint8_t *c1; VkShaderModule module; VkDescriptorSetLayout layout;
-    shader_binding_plan *binding_plan; uint32_t buffer_count,image_count,texel_count,dynamic_count;
+    shader_binding_plan *binding_plan; uint32_t buffer_count,image_count,texel_count,dynamic_count,has_storage_images;
     VkPipelineLayout compute_layout; VkPipeline compute_pipeline;
     // 被折进 dispatch Z 的倍数（Mali：LocalSize Z 已折到 MALI_LOCAL_Z_TARGET），1 表示没折。
     // The factor folded into the dispatch Z (Mali: LocalSize Z folded to MALI_LOCAL_Z_TARGET); 1 means none.
     uint32_t local_z_fold;
-    // 原始 SPIR-V 保留一份（仅诊断路径用来判断 LocalSize Z），着色器本来就只有几 KB。
-    // Keep the original SPIR-V (only the diagnostic path reads LocalSize Z from it); shaders are a few KB.
-    uint32_t *spirv_words; size_t spirv_word_count;
     vk_buffer constant_buffer;
     struct shader_entry *next;
 } shader_entry;
@@ -34,11 +31,12 @@ static uint64_t resource_created_count[3],resource_created_ns[3];
 static _Thread_local int resource_create_quiet;
 static const char *resource_create_names[]={"shader_load","graphics_pipeline","compute_pipeline"};
 static resource_create_start resource_create_begin(void) {
-    return (resource_create_start){dm_android_clock_ns(CLOCK_MONOTONIC),dm_android_clock_ns(CLOCK_THREAD_CPUTIME_ID)};
+    return (resource_create_start){dm_android_clock_ns(CLOCK_MONOTONIC),vulkan_diag_enabled()?dm_android_clock_ns(CLOCK_THREAD_CPUTIME_ID):0};
 }
 static void resource_create_end(unsigned kind,resource_create_start start,const char *shader,const char *fragment) {
     if(resource_create_quiet)return;
-    uint64_t cpu=dm_android_clock_ns(CLOCK_THREAD_CPUTIME_ID)-start.cpu,wall=dm_android_clock_ns(CLOCK_MONOTONIC)-start.wall,frame=presents+1;
+    uint64_t wall=dm_android_clock_ns(CLOCK_MONOTONIC)-start.wall,frame=presents+1;
+    uint64_t cpu=vulkan_diag_enabled()?dm_android_clock_ns(CLOCK_THREAD_CPUTIME_ID)-start.cpu:0;
     resource_create_stats *s=&resource_creates[kind];s->count++;s->wall+=wall;s->cpu+=cpu;
     resource_created_count[kind]++;resource_created_ns[kind]+=wall;
     if(wall>s->max_wall){s->max_wall=wall;s->max_wall_frame=frame;}if(cpu>s->max_cpu){s->max_cpu=cpu;s->max_cpu_frame=frame;}
@@ -217,7 +215,7 @@ static VkDescriptorType descriptor_type(const shader_binding *b) {
 static shader_entry *shader_load_by_key(const char *key,int stats,int fatal) {
     pthread_mutex_lock(&graphics_object_lock);
     for(shader_entry *s=shader_list;s;s=s->next)if(!strcmp(s->key,key)){pthread_mutex_unlock(&graphics_object_lock);return s;}
-    resource_create_start creation=resource_create_begin();
+    resource_create_start creation=stats?resource_create_begin():(resource_create_start){0};
     size_t bytes;uint32_t *meta=fatal?read_shader_file(key,"meta",&bytes):read_shader_file_opt(key,"meta",&bytes);
     if(!meta){pthread_mutex_unlock(&graphics_object_lock);return NULL;}
     if(bytes<28||memcmp(meta,"DMVK",4)||meta[1]!=1||meta[4]>256||meta[5]>65536||meta[6]!=32||bytes!=28+meta[4]*40+meta[5]+128){
@@ -228,11 +226,6 @@ static shader_entry *shader_load_by_key(const char *key,int stats,int fatal) {
     if(!code){free(meta);pthread_mutex_unlock(&graphics_object_lock);return NULL;}
     shader_entry *s=calloc(1,sizeof *s);if(!s)die("Vulkan shader allocation");strcpy(s->key,key);s->local_z_fold=1;s->stage=meta[2];s->set=meta[3];s->count=meta[4];s->c1_size=meta[5];s->bindings=(void*)(meta+7);s->c1=(uint8_t*)s->bindings+s->count*40;memcpy(s->attributes,s->c1+s->c1_size,128);
     VkShaderModuleCreateInfo mi={.sType=VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,.codeSize=bytes,.pCode=code};
-    // 留一份原始 SPIR-V：诊断路径要从中读 LocalSize Z（折叠后已改，读不到原值）。
-    // Keep a copy of the original SPIR-V: the diagnostic path reads LocalSize Z from it (the folded copy no
-    // longer carries the original value).
-    { size_t words=bytes/sizeof(uint32_t);uint32_t *keep=malloc(words*sizeof *keep);
-      if(keep){memcpy(keep,code,words*sizeof *keep);s->spirv_words=keep;s->spirv_word_count=words;} }
     // Mali 下把 compute 的 LocalSize Z 折成 1（见 shader_fold_local_z 的说明），倍数留给 dispatch 用。
     // On Mali fold the compute LocalSize Z down to 1 (see shader_fold_local_z); the multiplier is kept for dispatch.
     { uint32_t folded=0;uint32_t *rewritten=shader_fold_local_z((const uint32_t*)code,bytes/sizeof(uint32_t),&folded);
@@ -248,7 +241,7 @@ static shader_entry *shader_load_by_key(const char *key,int stats,int fatal) {
         shader_binding_plan *p=&s->binding_plan[i];p->type=descriptor_type(b);p->dynamic_index=-1;
         if(descriptor_type_uniform(p->type)||p->type==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER){p->offset=s->buffer_count;s->buffer_count+=b->count;}
         else if(p->type==VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER||p->type==VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER){p->offset=s->texel_count;s->texel_count+=b->count;}
-        else{p->offset=s->image_count;s->image_count+=b->count;}
+        else{p->offset=s->image_count;s->image_count+=b->count;if(b->kind==4)s->has_storage_images=1;}
         if(p->type==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER){
             unsigned base=s->stage==0?0x110:s->stage==5?0x310:0x510;int off=b->cb_offset*4;
             p->uniform_pointer=s->stage==5&&off>=0x210&&off<0x310;p->storage_slot=(off-(p->uniform_pointer?0x210:(int)base))/16;
@@ -315,13 +308,24 @@ static texture_descriptor descriptor_texture(int id) {
     texture_descriptor d={0};pthread_mutex_lock(&descriptor_lock);if(id>=0&&id<texture_capacity)d=texture_descriptors[id];pthread_mutex_unlock(&descriptor_lock);return d;
 }
 static image_entry *descriptor_image(const texture_descriptor *d,uint32_t type,int storage,VkPipelineStageFlags stage,VkAccessFlags access) {
-    if(d->valid){image_entry *e=image_get(&d->texture);if(!storage||(e->texture.has_layout&&e->texture.mem))image_upload(e);if(storage)image_gpu_written(e);image_access(e,stage,access);return e;}
+    if(d->valid){image_entry *e=image_get(&d->texture);if(!storage||(e->texture.has_layout&&e->texture.mem))image_upload(e);if(storage){e->storage_seen=1;image_gpu_written(e);}image_access(e,stage,access);return e;}
     // 未绑定采样资源保留零贴图；可写空槽用独立图像，防止计算输出污染后续采样。
     // Keep unbound sampled resources zero; separate writable images prevent compute output from polluting later samples.
     static tex_t dummy[2][32];unsigned index=(type&255)+(!!(type&256))*6+(!!(type&1024))*12;if(index>=32)die("Dummy texture type %u",type);
     tex_t *t=&dummy[!!storage][index];
     if(!t->serial){t->serial=UINT64_MAX-index-(!!storage)*32;t->d=(nvn_texdesc){.target=(type&255)==4?NVN_TEXTURE_TARGET_3D:(type&255)==5?NVN_TEXTURE_TARGET_CUBEMAP:(type&256)?NVN_TEXTURE_TARGET_2D_ARRAY:NVN_TEXTURE_TARGET_2D,.width=1,.height=1,.depth=(type&255)==5?6:1,.levels=1,.format=(type&1024)?NVN_FORMAT_DEPTH32F:NVN_FORMAT_RGBA8};nvn_tex_layout(&t->d,&t->L);}
-    image_entry *e=image_get(t);if(!e->populated){image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);VkClearColorValue zero={0};VkImageSubresourceRange r={e->aspect,0,1,0,e->texture.L.layers};if(type&1024){VkClearDepthStencilValue depth={1,0};vkCmdClearDepthStencilImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&depth,1,&r);}else vkCmdClearColorImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&zero,1,&r);e->populated=1;}image_access(e,stage,access);return e;
+    image_entry *e=image_get(t);if(storage)e->storage_seen=1;if(!e->populated){image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);VkClearColorValue zero={0};VkImageSubresourceRange r={e->aspect,0,1,0,e->texture.L.layers};if(type&1024){VkClearDepthStencilValue depth={1,0};vkCmdClearDepthStencilImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&depth,1,&r);}else vkCmdClearColorImage(command,e->image,VK_IMAGE_LAYOUT_GENERAL,&zero,1,&r);e->populated=1;}image_access(e,stage,access);return e;
+}
+static void shader_mark_storage_images(const shader_entry *s) {
+    if(!s||!s->has_storage_images)return;
+    for(unsigned i=0;i<s->count;i++){
+        const shader_binding *b=&s->bindings[i];
+        if(b->kind!=4||(b->type&255)==2)continue;
+        for(unsigned j=0;j<b->count;j++){
+            texture_descriptor descriptor=descriptor_texture(shader_handle(b,s->stage,j)&0xfffff);
+            if(descriptor.valid)image_get(&descriptor.texture)->storage_seen=1;
+        }
+    }
 }
 static VkImageView descriptor_view(const texture_descriptor *descriptor,image_entry *e,uint32_t type,int storage) {
     view_t v=descriptor->valid?descriptor->view:(view_t){0};
@@ -379,7 +383,7 @@ static descriptor_chunk *descriptor_chunk_new(void) {
     // 池必须覆盖用到的每个描述符类型；动态 uniform 是类型 8，只列 0-7 会让分配失败。
     // The pool must cover every descriptor type in use; dynamic uniform is type 8, so listing only 0-7 makes allocation fail.
     VkDescriptorPoolSize sizes[10];for(unsigned i=0;i<10;i++)sizes[i]=(VkDescriptorPoolSize){i,4096};
-    VkDescriptorPoolCreateInfo pi={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,.maxSets=256,.poolSizeCount=10,.pPoolSizes=sizes};VK_CHECK(vkCreateDescriptorPool(device,&pi,NULL,&c->pool));return c;
+    VkDescriptorPoolCreateInfo pi={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,.maxSets=512,.poolSizeCount=10,.pPoolSizes=sizes};VK_CHECK(vkCreateDescriptorPool(device,&pi,NULL,&c->pool));return c;
 }
 static VkDescriptorSet descriptor_allocate(VkDescriptorSetLayout layout) {
     if(!descriptor_current){descriptor_chunks=descriptor_chunk_new();descriptor_current=descriptor_chunks;}
@@ -565,7 +569,7 @@ static void dispatch_compute(const p_dispatch *d) {
             // This runs on the recording thread, which already holds queue_lock (see nvn_vulkan_guest_publish.inc);
             // locking that non-recursive mutex again self-deadlocks the whole process on a futex, and the log
             // stops right after "dependencies done".
-            VkResult q=vkQueueWaitIdle(queue);
+            pthread_mutex_lock(&vk_queue_lock);VkResult q=vkQueueWaitIdle(queue);pthread_mutex_unlock(&vk_queue_lock);
             LOG("[vulkan-pipeline] %s 建管线前已等待 GPU 空闲 result=%d",s->key,q);
         }
         // 有 storage image 的 compute 是 Mali 的已知崩溃点：先记下来，这样即便驱动随后崩掉，
@@ -608,7 +612,7 @@ static void dispatch_compute(const p_dispatch *d) {
     // Step markers: when the crash is inside the driver, only "how far we got" says which call blew up
     // (Mali dies inside its own code).
     int trace_dispatch=trace_dispatch_enabled();
-    if(trace_dispatch)LOG("[vulkan-dispatch] %s begin bind_shader bindings=%u",s->key,s->count);
+    shader_mark_storage_images(s);
     VkDescriptorSet set=bind_shader(s,NULL,dynamic_offsets,&dynamic_count);
     // LocalSize Z 被折成 1 时，dispatch 的 Z 要按同样倍数放大，线程总数才不变。
     // When LocalSize Z was folded to 1, the dispatch Z must grow by the same factor to keep the thread count.

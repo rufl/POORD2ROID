@@ -100,6 +100,23 @@ int main(void) {
         assert(dm_ui_surface_to_source(1.f, 2400, x, w) > 1.f);
         assert(fabsf(dm_ui_surface_to_source(.5f, 2400, x, w) - .5f) < 1e-6f);
     }
+    {
+        int w, h;
+        dm_ui_clamp_min_size(1020, 459, 1280, 720, &w, &h);
+        assert(w == 1600 && h == 720);
+        dm_ui_clamp_min_size(1280, 576, 1280, 720, &w, &h);
+        assert(w == 1600 && h == 720);
+        dm_ui_clamp_min_size(1024, 576, 1280, 720, &w, &h);
+        assert(w == 1280 && h == 720);
+        dm_ui_clamp_min_size(1536, 691, 1280, 720, &w, &h);
+        assert(w == 1600 && h == 720);
+        dm_ui_clamp_min_size(1600, 720, 1280, 720, &w, &h);
+        assert(w == 1600 && h == 720);
+        dm_ui_clamp_min_size(1280, 720, 1280, 720, &w, &h);
+        assert(w == 1280 && h == 720);
+        dm_ui_clamp_min_size(1536, 864, 1280, 720, &w, &h);
+        assert(w == 1536 && h == 864);
+    }
 
     return 0;
 }

@@ -232,19 +232,23 @@ def main():
     parser.add_argument("--no-malisx2", action="store_true",
                         help="明确构建不含 MaliSX2 的 APK")
     parser.add_argument("--touch-overlay-migration", type=Path,
-                        help="embed ctrl_touch and touch_strings.tsv to repair the known legacy 20:9 data overlay without reimporting game data")
+                        help="embed normal and large complete Android touch overlays, selected on the next game launch")
     args = parser.parse_args()
     if args.game_source and not args.game_run: parser.error("--game-source only makes sense with --game-run")
     if args.touch_overlay_migration and not args.game_run:
         parser.error("--touch-overlay-migration requires --game-run")
+    migration_variants = {}
     if args.touch_overlay_migration:
-        for name in ("ctrl_touch", "touch_strings.tsv"):
-            if not (args.touch_overlay_migration / name).is_file():
-                parser.error("--touch-overlay-migration must contain " + name)
-        migration_data = args.touch_overlay_migration / "data"
-        migration_archives = sorted(migration_data.glob("*.data")) if migration_data.is_dir() else []
-        if not (migration_data / ".build.config").is_file() or len(migration_archives) != 1:
-            parser.error("--touch-overlay-migration requires data/.build.config and exactly one .data archive")
+        for variant in ("normal", "large"):
+            source = args.touch_overlay_migration / variant
+            for name in ("ctrl_touch", "touch_strings.tsv"):
+                if not (source / name).is_file():
+                    parser.error("--touch-overlay-migration/" + variant + " must contain " + name)
+            migration_data = source / "data"
+            migration_archives = sorted(migration_data.glob("*.data")) if migration_data.is_dir() else []
+            if not (migration_data / ".build.config").is_file() or len(migration_archives) != 1:
+                parser.error("--touch-overlay-migration/" + variant + " requires data/.build.config and exactly one .data archive")
+            migration_variants[variant] = (source, migration_archives[0])
     if args.game_run and not args.game_source:
         # 没有游戏源码也照样出 APK：宿主与前端完整，**游戏模块由手机端导入的数据包提供**（启动界面本来就要
         # 先导入才能启动）。CI 用它产出可下载的通用 APK；本机带 --game-source 时照旧把游戏代码打进包里。
@@ -306,18 +310,19 @@ def main():
     assets = build / "assets"
     assets.mkdir(exist_ok=True)
     shutil.rmtree(assets / "touch-layout-migration", ignore_errors=True)
-    if args.touch_overlay_migration:
-        migration = assets / "touch-layout-migration"
-        migration.mkdir()
+    for variant, (source, archive) in migration_variants.items():
+        migration = assets / "touch-layout-migration" / variant
+        migration.mkdir(parents=True)
         for name in ("ctrl_touch", "touch_strings.tsv"):
-            shutil.copyfile(args.touch_overlay_migration / name, migration / name)
+            shutil.copyfile(source / name, migration / name)
         migration_data = migration / "data"
         migration_data.mkdir()
-        for source in [args.touch_overlay_migration / "data" / ".build.config", *migration_archives]:
-            destination = "build.config" if source.name == ".build.config" else source.name
-            shutil.copyfile(source, migration_data / destination)
-        (migration / "archive.name").write_text(migration_archives[0].name + "\n", encoding="ascii")
-        print("Legacy 20:9 Android HUD overlay embedded for on-device migration", flush=True)
+        for source_file in [source / "data" / ".build.config", archive]:
+            destination = "build.config" if source_file.name == ".build.config" else source_file.name
+            shutil.copyfile(source_file, migration_data / destination)
+        (migration / "archive.name").write_text(archive.name + "\n", encoding="ascii")
+        (migration / "archive.sha256").write_text(sha256_file(archive) + "\n", encoding="ascii")
+        print("Android HUD overlay profile embedded: " + variant, flush=True)
     licenses = assets / "licenses"
     licenses.mkdir(exist_ok=True)
     for license_file in (build / "gpu-driver/licenses").glob("*.txt"):
@@ -430,18 +435,21 @@ def main():
     run([TOOLS / "build-tools/apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--key-pass", "pass:android",
          "--out", apk, aligned], env=env)
     run([TOOLS / "build-tools/apksigner", "verify", apk], env=env)
-    if args.touch_overlay_migration:
+    if migration_variants:
         # aapt silently drops dotfiles. Verify the actual APK contract, including
         # the visible asset name that native restores as data/.build.config.
         with zipfile.ZipFile(apk) as packaged:
-            for relative in ("ctrl_touch", "touch_strings.tsv", "archive.name",
-                             "data/build.config", "data/" + migration_archives[0].name):
-                name = "assets/touch-layout-migration/" + relative
-                if name not in packaged.namelist():
-                    sys.exit("APK migration asset missing after packaging: " + name)
-            if packaged.read("assets/touch-layout-migration/data/build.config") != \
-                    (args.touch_overlay_migration / "data" / ".build.config").read_bytes():
-                sys.exit("APK migration build config differs from the generated overlay")
+            for variant, (source, archive) in migration_variants.items():
+                prefix = "assets/touch-layout-migration/" + variant + "/"
+                for relative in ("ctrl_touch", "touch_strings.tsv", "archive.name", "archive.sha256",
+                                 "data/build.config", "data/" + archive.name):
+                    name = prefix + relative
+                    if name not in packaged.namelist():
+                        sys.exit("APK migration asset missing after packaging: " + name)
+                if packaged.read(prefix + "data/build.config") != (source / "data" / ".build.config").read_bytes():
+                    sys.exit("APK migration build config differs from the generated overlay")
+                if packaged.read(prefix + "archive.sha256").decode("ascii") != sha256_file(archive) + "\n":
+                    sys.exit("APK migration archive digest differs from the generated overlay")
     print("APK:", apk)
     if args.install:
         run([TOOLS / "platform-tools/adb", "install", "-r", apk])

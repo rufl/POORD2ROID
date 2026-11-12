@@ -16,7 +16,8 @@ typedef struct { char kind;char vs[17],fs[17];graphics_pass_key pass;pipeline_ke
 static pthread_mutex_t pso_manifest_mutex=PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int pso_warm_running;
 static pso_record *pso_records;
-static size_t pso_record_count;
+static size_t pso_record_count,pso_warm_cursor,pso_warm_built,pso_warm_skipped;
+static uint64_t pso_warm_total_ns;
 static uint64_t *pso_seen;
 static size_t pso_seen_capacity,pso_seen_count;
 static uint64_t pso_user_bytes;
@@ -182,43 +183,37 @@ static int pso_warm_one(const pso_record *record) {
     vkDestroyPipeline(device,pipeline,NULL);
     return 1;
 }
-static void *pso_warm_main(void *unused) {
-    (void)unused;pthread_setname_np(pthread_self(),"D2R PSO warm");
-    resource_create_quiet=1;   // 预热创建全部不记账（长帧账目与慢创建明细只管游戏线程）| warm creations never account (long-frame totals and slow-create details cover the game thread only)
-    uint64_t begin=dm_android_clock_ns(CLOCK_MONOTONIC),built=0,skipped=0;
-    for(size_t i=0;i<pso_record_count;i++){
-        if(pso_warm_one(&pso_records[i]))built++;else skipped++;
-        if((i&15)==15)LOG("[vulkan-pso-warm] progress=%zu/%zu built=%llu skipped=%llu",i+1,pso_record_count,(unsigned long long)built,(unsigned long long)skipped);
+// 仅在加载机会持 queue_lock 串行步进预热：不启后台线程，避免 Mali 并发建管线崩溃；单次受时间和条数双上限约束。
+// Serial bounded warm-up under queue_lock on loading paths only: avoids Mali concurrent-compile SIGSEGV and caps both time and record count.
+static unsigned pso_warm_step_locked(unsigned budget_ms,unsigned max_records) {
+    if(!atomic_load(&pso_warm_running)||!budget_ms||!max_records||recording)return 0;
+    int previous_quiet=resource_create_quiet;
+    resource_create_quiet=1;
+    uint64_t begin=dm_android_clock_ns(CLOCK_MONOTONIC),limit_ns=(uint64_t)budget_ms*1000000ull;
+    unsigned processed=0;
+    while(pso_warm_cursor<pso_record_count&&processed<max_records){
+        if(processed&&dm_android_clock_ns(CLOCK_MONOTONIC)-begin>=limit_ns)break;
+        if(pso_warm_one(&pso_records[pso_warm_cursor++]))pso_warm_built++;else pso_warm_skipped++;
+        processed++;
+        if((pso_warm_cursor&15)==0)LOG("[vulkan-pso-warm] progress=%zu/%zu built=%zu skipped=%zu",pso_warm_cursor,pso_record_count,pso_warm_built,pso_warm_skipped);
     }
-    LOG("[vulkan-pso-warm] done records=%zu built=%llu skipped=%llu wall_ms=%.1f",pso_record_count,(unsigned long long)built,(unsigned long long)skipped,(dm_android_clock_ns(CLOCK_MONOTONIC)-begin)/1e6);
-    free(pso_records);pso_records=NULL;pso_record_count=0;
-    atomic_store(&pso_warm_running,0);
-    return NULL;
+    uint64_t elapsed=dm_android_clock_ns(CLOCK_MONOTONIC)-begin;
+    pso_warm_total_ns+=elapsed;
+    if(pso_warm_cursor>=pso_record_count){
+        LOG("[vulkan-pso-warm] done records=%zu built=%zu skipped=%zu wall_ms=%.1f",pso_record_count,pso_warm_built,pso_warm_skipped,pso_warm_total_ns/1e6);
+        free(pso_records);pso_records=NULL;pso_record_count=0;pso_warm_cursor=0;
+        atomic_store(&pso_warm_running,0);
+    }
+    resource_create_quiet=previous_quiet;
+    return processed;
 }
-// initialize() 末尾调用：读清单、建去重集合、后台开预热线程；本地缓存目录或显式清单缺失时不启动。
-// Called at the end of initialize(): read manifests, build the dedup set, start the background warm thread; idle when the local cache directory and explicit manifest are both absent.
+// initialize() 末尾调用：读清单、建去重集合并排队，待读取画面串行步进；Mali 默认关闭除非显式开启 pso_warm 1。
+// Called at the end of initialize(): load manifests into a serial warm queue; stays opt-in on Mali unless perf.conf sets pso_warm 1.
 static void pso_warm_start(void) {
-    // 诊断开关：pso_warm 0（perf.conf）关掉后台预热线程。并发建管线在某些驱动上会出问题，
-    // 关掉它可以把"预热线程与提交线程并发建管线"这个变量单独排除掉。
-    // Diagnostic: pso_warm 0 in perf.conf stops the background warm thread, isolating the
-    // "warm thread creates pipelines concurrently with the submit thread" variable.
-    if(!perf_config_int("pso_warm",1)){LOG("[vulkan-pso-warm] disabled by perf.conf pso_warm 0");return;}
-    // Mali 上默认不预热：实测（2026-10-23）后台预热线程与提交线程**并发创建管线**会让
-    // Mali 驱动在自己内部 SIGSEGV（addr=0x18，x5=ASCII "le.flags"，pc/lr 都在 libGLES_mali.so）。
-    // 而且它会自激：第一轮顺利跑完并写出 pso_vk_user.tsv，第二次启动读到清单才起线程 → 第二轮才崩。
-    // 单变量对照：同一配置下 pso_warm 0 跑到 frame>1380 无崩溃，pso_warm 1 在 424 行崩。
-    // Adreno 上并发建管线一直是安全的，预热是有效的首帧优化，所以只在 Mali 上退让。
-    // No warm-up on Mali by default: measured 2026-10-23, the background warm thread creating pipelines
-    // concurrently with the submit thread makes the Mali driver SIGSEGV inside itself (addr=0x18, x5=ASCII
-    // "le.flags", pc/lr inside libGLES_mali.so). It also self-feeds: the first run finishes fine and writes
-    // pso_vk_user.tsv, and only the next launch reads that manifest and starts the thread -- so run 2 crashes.
-    // Single-variable control: the same config reaches frame>1380 with pso_warm 0 and crashes at line 424 with
-    // pso_warm 1. Concurrent pipeline creation has always been safe on Adreno, where warm-up is a real
-    // first-frame win, so back off on Mali only.
-    if(gpu_has_mali_local_z_limit()){
-        LOG("[vulkan-pso-warm] skipped: Mali 上并发建管线会让驱动崩溃（实测 2026-10-23）");
-        return;
-    }
+    const char *env=getenv("DM_VK_PSO_WARM");
+    int mali=gpu_has_mali_local_z_limit();
+    int enabled=env&&*env?(strcmp(env,"0")!=0):(perf_config_int("pso_warm",mali?0:1)!=0);
+    if(!enabled){LOG("[vulkan-pso-warm] disabled (%s)",mali?"Mali opt-in: set pso_warm 1":"perf.conf pso_warm 0");return;}
     const char *setting=getenv("DM_PSO_MANIFEST");
     int explicit_path=setting&&*setting&&strcmp(setting,"off");
     if(pipeline_disk_dir<0&&!explicit_path)return;
@@ -230,18 +225,13 @@ static void pso_warm_start(void) {
     pthread_mutex_lock(&pso_manifest_mutex);
     if(explicit_path)pso_manifest_parse_path(setting,collect);
     else{
-        // 先本机积累（更贴近实际使用顺序），再随包种子；同一行只算一次。
-        // Local accumulation first (closer to actual use order), then the shipped seed; a line counts once.
         pso_user_file();
         if(pipeline_disk_dir>=0){int fd=openat(pipeline_disk_dir,PSO_USER_NAME,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);if(fd>=0){pso_manifest_parse_fd(fd,PSO_USER_NAME,collect);close(fd);}}
         if(seed[0])pso_manifest_parse_path(seed,collect);
     }
     pthread_mutex_unlock(&pso_manifest_mutex);
     if(!collect||!pso_record_count){free(pso_records);pso_records=NULL;return;}
-    LOG("[vulkan-pso-warm] start records=%zu seed=%s user_dir=%s",pso_record_count,seed[0]?seed:"(none)",getenv("DM_VK_PIPELINE_CACHE_DIR")?getenv("DM_VK_PIPELINE_CACHE_DIR"):"(none)");
+    pso_warm_cursor=0;pso_warm_built=0;pso_warm_skipped=0;pso_warm_total_ns=0;
+    LOG("[vulkan-pso-warm] queued records=%zu mode=serial seed=%s user_dir=%s",pso_record_count,seed[0]?seed:"(none)",getenv("DM_VK_PIPELINE_CACHE_DIR")?getenv("DM_VK_PIPELINE_CACHE_DIR"):"(none)");
     atomic_store(&pso_warm_running,1);
-    pthread_t thread;
-    int error=pthread_create(&thread,NULL,pso_warm_main,NULL);
-    if(error){atomic_store(&pso_warm_running,0);free(pso_records);pso_records=NULL;pso_record_count=0;LOG("[vulkan-pso-warm] worker_create_failed=%d",error);return;}
-    pthread_detach(thread);
 }

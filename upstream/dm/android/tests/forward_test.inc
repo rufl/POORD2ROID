@@ -39,7 +39,7 @@ static void forward_reference_test(void) {
     copy=(VkBufferCopy){.srcOffset=slice.offset,.size=sizeof destination};vkCmdCopyBuffer(command,slice.buffer,consumer->output.buffer,1,&copy);forward_mark_gpu_recorded(consumer,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,1);forward_test_host_visibility();uint64_t consumed=async_raw_commit();
     int fired=reference_gate_watchdog_stop(&watchdog[0]);reference_gate_signal(gates[0],1);assert(mtl_wait(produced,5000000000ull));for(unsigned i=0;i<4;i++)assert(result[i]==0x12345678&&destination[i]==0);
     assert(!mtl_wait(consumed,0));assert(atomic_load(&slice.backing.owner->references)==1);
-    pthread_mutex_lock(&buffer_cache_lock);for(cached_buffer *entry=buffer_cache;entry;entry=entry->next)assert(entry->buffer.buffer!=slice.buffer);pthread_mutex_unlock(&buffer_cache_lock);
+    assert(!buffer_cache_contains(slice.buffer));
     fired|=reference_gate_watchdog_stop(&watchdog[1]);reference_gate_signal(gates[1],1);assert(mtl_wait(consumed,5000000000ull));for(unsigned i=0;i<4;i++)assert(destination[i]==0x12345678);
     for(unsigned i=0;i<2;i++)reference_gate_close(gates[i],1);assert(!fired);mtl_pool_del(result);mtl_pool_del(destination);
     puts("Vulkan forwarding: future outputs excluded, exact offsets/alignment, partial/event fallback, ordered GPU copies, retain dedup and producer-published/consumer-pending backing lifetime PASS");

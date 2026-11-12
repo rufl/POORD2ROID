@@ -226,10 +226,34 @@ static float scale3d_auto_target(int level, float configured) {
     return target > configured ? configured : target;
 }
 static _Atomic int g_scale3d_forced = -1;
+static _Atomic int g_scale3d_auto_min = 50;
+static _Atomic int g_scale3d_auto_max = 100;
+static _Atomic int g_scale3d_thermal_cap = 100;
 void dm_3d_scale_set_preset(int preset) {
     if (preset < -1 || preset > 3) return;
     atomic_store(&g_scale3d_forced, preset);
     LOG("3D 比例档位切到「%s」，下一拍生效", preset < 0 ? "自动" : preset == 0 ? "高质量" : preset == 1 ? "平衡" : preset == 2 ? "性能" : "超性能");
+}
+void dm_3d_scale_set_auto_bounds(int min_pct, int max_pct) {
+    if (min_pct < 50) min_pct = 50;
+    if (max_pct > 100) max_pct = 100;
+    if (min_pct > max_pct) min_pct = max_pct;
+    atomic_store(&g_scale3d_auto_min, min_pct);
+    atomic_store(&g_scale3d_auto_max, max_pct);
+    LOG("3D 自动范围设为 %d%%–%d%%", min_pct, max_pct);
+}
+static float scale3d_clamp_auto(float target) {
+    int min_pct = atomic_load(&g_scale3d_auto_min);
+    int max_pct = atomic_load(&g_scale3d_auto_max);
+    int thermal_pct = atomic_load(&g_scale3d_thermal_cap);
+    float lo = min_pct / 100.0f;
+    float hi = max_pct / 100.0f;
+    float tcap = thermal_pct / 100.0f;
+    if (tcap < lo) lo = tcap;
+    if (tcap < hi) hi = tcap;
+    if (target < lo) target = lo;
+    if (target > hi) target = hi;
+    return target;
 }
 // 前端可改的出图节拍（帧率目标）：>0 固定帧率，<0 跟随屏幕最高刷新率。
 // 运行中可改，下一次出图生效：出图周期、窗口的刷新率请求、3D 比例控制的目标周期一起跟着变。
@@ -245,34 +269,92 @@ void dm_present_hz_set(int hz) {
 static _Atomic int g_scale3d_level;
 static _Atomic int g_scale3d_resumed;
 void dm_3d_scale_resumed(void) { atomic_store(&g_scale3d_resumed, 1); }   // 前端：刚回前台。回来头几秒的慢帧是恢复（表面重建、缓存变冷），不是 GPU 吃紧：停判 3 秒 | front end: just returned to foreground. Slow frames in the first few seconds back are recovery (surface rebuild, caches gone cold), not GPU pressure: suspend judging for 3 seconds
-void dm_3d_scale_feed(double iv_ms, double gpu_ms) {   // present thread feeds interval and optional Android GPU timing from diag.c
+static int scale3d_cpu_aware_gate(int was, int lv, double fps, double gpu_ms, double cpu_ms, double period_ms,
+                                  int *last_down_level, double *last_down_fps, double *last_down_gpu) {
+    if (lv < was) {
+        *last_down_level = -1;
+        return lv;
+    }
+    if (lv > was) {
+        // CPU 瓶颈时降低 3D 分辨率无益（只会模糊画面）；仅 GPU 受限才继续降档。
+        // Do not lower 3D resolution when CPU-limited (it only blurs without gaining FPS).
+        if (cpu_ms > 0 && gpu_ms > 0 && cpu_ms > gpu_ms * 1.15 && gpu_ms < period_ms * 0.85) return was;
+        // 上次降档既没带来帧率提升也没明显缩短 GPU，说明降分辨率无益，避免一路糊到最低档。
+        // If the previous downstep neither improved FPS nor reduced GPU time, stop blurring further.
+        if (was > 0 && *last_down_level == was) {
+            int fps_improved = *last_down_fps > 0 && fps > *last_down_fps * 1.03;
+            int gpu_improved = gpu_ms > 0 && *last_down_gpu > 0 && gpu_ms < *last_down_gpu * 0.95;
+            if (!fps_improved && !gpu_improved) return was;
+        }
+        *last_down_level = lv;
+        *last_down_fps = fps;
+        *last_down_gpu = gpu_ms;
+    }
+    return lv;
+}
+void dm_3d_scale_feed_load(double iv_ms, double gpu_ms, double cpu_ms) {
     static scale3d_ctl c = {.max_level = 5}; static int on = -1; static long inj0 = -1, inj1 = -1;
+    static double win_cpu_ms, win_gpu_latest; static unsigned win_cpu_n;
+    static int last_down_level = -1; static double last_down_fps, last_down_gpu;
+    static uint64_t last_thermal_ns; static int last_thermal = -1;
     if (on < 0) { const char *e = getenv("DM_3D_SCALE_DYN"), *j = getenv("DM_3D_SCALE_DYN_INJECT"); on = !(e && !strcmp(e, "0")) && !getenv("DM_THERMAL_NOFALLBACK");
         if (j) { inj0 = atol(j); inj1 = strchr(j, '-') ? atol(strchr(j, '-') + 1) : inj0; } }
     if (!on) return;
     if (atomic_load(&g_scale3d_forced) >= 0) return;   // 菜单定档期间动态控制器不插手 | while the menu has a level pinned, the dynamic controller stays out
     if (inj0 >= 0) { long f = (long)dm_nvn_frame_count(); int injected = f >= inj0 && f <= inj1; iv_ms = injected ? 25.0 : 16.7; gpu_ms = injected ? 25.0 : 10.0; }
     uint64_t now = now_ns();
-    if (atomic_exchange(&g_scale3d_resumed, 0)) scale3d_ctl_hold(&c, now, 3 * S3_SEC);
+    if (now >= last_thermal_ns + 2 * S3_SEC) {
+        extern int dm_thermal_now(void) __attribute__((weak));
+        int th = dm_thermal_now ? dm_thermal_now() : -1;
+        last_thermal_ns = now;
+        if (th >= 0 && th != last_thermal) {
+            last_thermal = th;
+            int cap = th >= 3 ? 70 : th == 2 ? 85 : 100;
+            atomic_store(&g_scale3d_thermal_cap, cap);
+            LOG("[thermal] status=%d -> Auto DRS cap=%d%%", th, cap);
+        }
+    }
+    if (atomic_exchange(&g_scale3d_resumed, 0)) { scale3d_ctl_hold(&c, now, 3 * S3_SEC); win_cpu_ms = 0; win_cpu_n = 0; last_down_level = -1; }
     { static int was; int in = dm_ingame_now();   // 不在局内（菜单 / 读取）不判；刚进局的 20 秒也不判（进局头十几秒的慢帧是装载，不是 GPU 吃紧） | not judged outside a run (menu / loading); not judged in the first 20 seconds of a run either (slow frames in the first ten-odd seconds of a run are loading, not GPU pressure)
-      if (!in) { was = 0; scale3d_ctl_hold(&c, now, S3_SEC); return; }
-      if (!was) { was = 1; if (inj0 < 0) scale3d_ctl_hold(&c, now, 20 * S3_SEC); } }
+      if (!in) { was = 0; scale3d_ctl_hold(&c, now, S3_SEC); win_cpu_ms = 0; win_cpu_n = 0; return; }
+      if (!was) { was = 1; if (inj0 < 0) scale3d_ctl_hold(&c, now, 20 * S3_SEC); win_cpu_ms = 0; win_cpu_n = 0; last_down_level = -1; } }
     { int mtl_fps_target(void); int nvn_present_hz(void);
-      // 目标周期：省电模式（30 帧）走显示节拍那条；前端指定的出图节拍（安卓端的帧率档）按它算。
-      // 两者都不动时是 0 —— 控制器按 60 帧的缺省目标判。
-      // The target period: power-saving mode (30 frames) comes from the display link; a present rate the front end set
-      // (the Android frame rate preset) is used as given. With neither, it stays 0 and the controller judges against
-      // the 60 fps default.
       double p = mtl_fps_target() == 30 ? 1000.0 / 30 : 0;
       int hz = nvn_present_hz(); if (hz > 0 && hz != 60) p = 1000.0 / hz;
-      if (p != c.period_ms) { c.period_ms = p; scale3d_ctl_hold(&c, now, 2 * S3_SEC); } }   // 帧率档换了：目标周期跟着换，切换后停判 2 秒 | the frame rate preset changed: the target period follows, judging is suspended for 2 seconds after the switch
+      if (p != c.period_ms) { c.period_ms = p; scale3d_ctl_hold(&c, now, 2 * S3_SEC); win_cpu_ms = 0; win_cpu_n = 0; last_down_level = -1; } }
+    if (now >= c.hold_until && iv_ms > 0) {
+        if (cpu_ms > 0) { win_cpu_ms += cpu_ms; win_cpu_n++; }
+        if (gpu_ms > 0) win_gpu_latest = gpu_ms;
+    }
     int was = c.level, lv = scale3d_ctl_step(&c, iv_ms, gpu_ms, now);
-    if (lv != was) LOG("3D 比例控制：窗口帧率 %.1f（目标 %.0f）→ %s到第 %d 级%s", c.last_fps, c.period_ms > 0 ? 1000.0 / c.period_ms : 60.0, lv > was ? "降" : "升", lv, c.need_good ? "（刚升又掉：下次升档要 60 秒）" : "");
+    if (lv != was) {
+        double avg_cpu = win_cpu_n ? win_cpu_ms / win_cpu_n : -1;
+        double period = c.period_ms > 0 ? c.period_ms : 1000.0 / 60;
+        int gated = scale3d_cpu_aware_gate(was, lv, c.last_fps, win_gpu_latest, avg_cpu, period, &last_down_level, &last_down_fps, &last_down_gpu);
+        if (gated != lv) {
+            c.level = gated;
+            LOG("3D 比例控制：抑制无效降档（CPU=%.1fms GPU=%.1fms FPS=%.1f）", avg_cpu, win_gpu_latest, c.last_fps);
+            lv = gated;
+        } else {
+            LOG("3D 比例控制：窗口帧率 %.1f（目标 %.0f）→ %s到第 %d 级%s", c.last_fps, c.period_ms > 0 ? 1000.0 / c.period_ms : 60.0, lv > was ? "降" : "升", lv, c.need_good ? "（刚升又掉：下次升档要 60 秒）" : "");
+        }
+        win_cpu_ms = 0; win_cpu_n = 0;
+    } else if (c.win_n == 0) {
+        win_cpu_ms = 0; win_cpu_n = 0;
+    }
     atomic_store(&g_scale3d_level, lv);
 }
-void dm_3d_scale_hot(int hot) { (void)hot; }   // 过热不再直接降档（改按实际掉帧）；保留符号给前端 | overheating no longer lowers the level directly (now by actual dropped frames); the symbol is kept for the front end
+void dm_3d_scale_feed(double iv_ms, double gpu_ms) { dm_3d_scale_feed_load(iv_ms, gpu_ms, -1); }
+void dm_3d_scale_hot(int hot) { (void)hot; }   // 过热不再直接降档（改按实际掉帧与温控上限）；保留符号给前端 | retained for frontend compatibility
 static _Atomic float g_scale3d_cur = 1.0f;
+static _Atomic uint32_t g_scale3d_w3d, g_scale3d_h3d, g_scale3d_wout, g_scale3d_hout;
 float dm_3d_scale_cur(void) { return atomic_load(&g_scale3d_cur); }
+void dm_3d_render_dims(uint32_t *w3d, uint32_t *h3d, uint32_t *wout, uint32_t *hout) {
+    if (w3d) *w3d = atomic_load(&g_scale3d_w3d);
+    if (h3d) *h3d = atomic_load(&g_scale3d_h3d);
+    if (wout) *wout = atomic_load(&g_scale3d_wout);
+    if (hout) *hout = atomic_load(&g_scale3d_hout);
+}
 static void scale3d_tick(void) {
     static float want_cfg = -1, cur = 1.0f; static module_t *main;
     if (want_cfg < 0) {
@@ -280,9 +362,18 @@ static void scale3d_tick(void) {
         if (e) { char *end; float v = strtof(e, &end); if (end == e || *end || !(v >= 0.5f && v <= 1.0f)) die("DM_3D_SCALE 非法：%s（要求 0.5–1.0）", e); want_cfg = v; }
         for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) main = &g_mod[i];
     }
+    if (main && dm_nvn_frame_count() >= 30) {
+        uintptr_t renderer = *(uintptr_t *)(main->base + 0x31e0848);
+        if (renderer) {
+            atomic_store(&g_scale3d_w3d, *(uint32_t *)(renderer + 0xee78));
+            atomic_store(&g_scale3d_h3d, *(uint32_t *)(renderer + 0xee7c));
+            atomic_store(&g_scale3d_wout, *(uint32_t *)(renderer + 0xee88));
+            atomic_store(&g_scale3d_hout, *(uint32_t *)(renderer + 0xee8c));
+        }
+    }
     int lv = atomic_load(&g_scale3d_level);   // 动态级：0 = 配置值，自动级逐步降至 0.50 | dynamic level: 0 = configured value; automatic levels descend to 0.50
     int forced = atomic_load(&g_scale3d_forced);   // 菜单定档时以定档值为准，动态级不参与 | a menu-pinned level wins over the dynamic one
-    float dyn = forced >= 0 ? scale3d_preset_target(forced, want_cfg) : scale3d_auto_target(lv, want_cfg);
+    float dyn = forced >= 0 ? scale3d_preset_target(forced, want_cfg) : scale3d_clamp_auto(scale3d_auto_target(lv, want_cfg));
     float want = dm_nvn_ruler_truth() ? 1.0f : dyn;
     if (want == cur || !main || dm_nvn_frame_count() < 30) return;
     uintptr_t renderer = *(uintptr_t *)(main->base + 0x31e0848); if (!renderer) return;
@@ -292,6 +383,10 @@ static void scale3d_tick(void) {
     dm_guest_host_write_begin(scale, sizeof *scale); *scale = want; dm_guest_host_write_end();
     ((void (*)(uint32_t, uint32_t))(main->base + 0x8582f0))(ow, oh);
     cur = want; atomic_store(&g_scale3d_cur, want);
+    atomic_store(&g_scale3d_w3d, *(uint32_t *)(renderer + 0xee78));
+    atomic_store(&g_scale3d_h3d, *(uint32_t *)(renderer + 0xee7c));
+    atomic_store(&g_scale3d_wout, *(uint32_t *)(renderer + 0xee88));
+    atomic_store(&g_scale3d_hout, *(uint32_t *)(renderer + 0xee8c));
     LOG("3D 渲染比例 %.2f：3D 目标 %ux%u，输出 %ux%u（帧 %llu）", want, *(uint32_t *)(renderer + 0xee78), *(uint32_t *)(renderer + 0xee7c),
         *(uint32_t *)(renderer + 0xee88), *(uint32_t *)(renderer + 0xee8c), (unsigned long long)dm_nvn_frame_count());
 }

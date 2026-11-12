@@ -8,7 +8,9 @@
 import re
 import json, os, struct, subprocess, sys, tempfile, shutil
 from PIL import Image
-HERE=os.path.dirname(os.path.abspath(__file__)); V4=os.environ.get('DM_HUD_V4_DIR') or __import__('gen_paths').gen_dir('NativeHUD','v4')   # 试调时可指向别的产物目录 | Can point to another build output directory when tuning
+HERE=os.path.dirname(os.path.abspath(__file__)); V4=os.environ.get('DM_HUD_V4_DIR') or __import__('gen_paths').gen_dir('NativeHUD','v4')   # 试调时可指向别的产物目录 | Can point to another output directory while tuning
+TARGET=os.environ.get('DM_TARGET','').strip().lower()
+FONT_LARGE=os.environ.get('DM_FONT_LARGE','1') != '0'
 romfs, out = sys.argv[1], sys.argv[2]
 sys.path.insert(0,HERE); import gen_assets; gen_assets.ensure(romfs)   # 要读的生成资源（底栏 v4、选角右侧面板…）先确保齐全；输入没变不重出（gen_assets.py 文件头） | First make sure the generated resources to be read (bottom bar v4, character select right panel...) are complete; not regenerated if inputs are unchanged (gen_assets.py file header)
 REPL={'data/hd/global/ui/panel/hud_02/bugbtn.sprite':'base.sprite',            # 借用路径（登记表「当前用途」= 底部 UI v4 底图） | Borrowed path (registry 「当前用途」(current use) = bottom UI v4 base image)
@@ -42,12 +44,12 @@ with tempfile.TemporaryDirectory() as t:
     sys.path.insert(0,HERE); import touch_layout
     tl,ntl=touch_layout.build(romfs,t); REPL.update(tl)
     REPL.update(touch_layout.build_pcfront(romfs,t))   # 选角页改用键鼠版界面（盖掉上面 build 对这几份的改动） | Character select page switched to the keyboard-and-mouse UI (overrides the changes the build above made to these files)
-    tp,ntp=touch_layout.build_present(romfs,t); REPL.update(tp)   # 局内：页签条两端 L / R、人物页耐力行 | In-game: L / R at the two ends of the tab strip, stamina row on the character page
-    ti,nti=touch_layout.build_ingame(romfs,t); REPL.update(ti)   # 局内：各面板右上角的关闭按钮（同一落点、各发各的消息）与手柄版删掉的功能按钮（修理 / 翻页 / 高级属性 / 选项页应用·默认·放弃）；要在 build_present 之后（同一文件以这份为准） | In-game: the close button at each panel's top-right corner (same position, each sending its own message) and the function buttons removed in the controller version (repair / page turn / advanced stats / options page apply·default·discard); must come after build_present (for the same file this copy wins)
+    tp,ntp=touch_layout.build_present(romfs,t,target=TARGET); REPL.update(tp)   # 局内：页签条两端 L / R、人物页耐力行 | In-game: L / R at the two ends of the tab strip, stamina row on the character page
+    ti,nti=touch_layout.build_ingame(romfs,t,target=TARGET); REPL.update(ti)   # 局内：各面板右上角的关闭按钮（同一落点、各发各的消息）与手柄版删掉的功能按钮（修理 / 翻页 / 高级属性 / 选项页应用·默认·放弃）；要在 build_present 之后（同一文件以这份为准） | In-game: the close button at each panel's top-right corner (same position, each sending its own message) and the function buttons removed in the controller version (repair / page turn / advanced stats / options page apply·default·discard); must come after build_present (for the same file this copy wins)
     import merc_slots; REPL.update(merc_slots.build(romfs,t,REPL))   # 佣兵面板加六个装备位（底图 + 布局；要在 build_ingame 给它插关闭钮之后） | Add six equipment slots to the mercenary panel (base image + layout; must come after build_ingame has inserted the close button into it)
     REPL.update(touch_layout.build_cursor(romfs,t))   # 面板里的手柄光标圆环换成透明 | The controller cursor ring in panels replaced with a transparent one
     REPL.update(touch_layout.build_glyphs(romfs,t))   # 22 张手柄键图标换成透明 | 22 controller button icons replaced with transparent ones
-    REPL.update(touch_layout.build_profile(romfs,t))   # 大字号 | Large font size
+    if FONT_LARGE: REPL.update(touch_layout.build_profile(romfs,t,target=TARGET))   # Large font size
     import touch_strings; ts,nts=touch_strings.build(romfs,t); REPL.update(ts)   # 排版用的串（大字号）；手柄说法 → 触摸说法改由宿主按模式换（旁路表 touch_strings.tsv，见 emit） | Strings used for typesetting (large font size); controller wording → touch wording is now switched by the host according to mode (sidecar table touch_strings.tsv, see emit)
     TS=touch_strings.build_sidecar(romfs)
     import dm_i18n; si,nsi=dm_i18n.build(romfs,t,REPL); REPL.update(si)   # 我们自己的界面文字（中英表 dm/i18n/ui_text.tsv）追加进原版 ui.json，布局写 @键、宿主按键取串 | our own UI text (Chinese-English string table dm/i18n/ui_text.tsv) is appended to the original ui.json; layouts write @key and the host looks strings up by key
@@ -76,7 +78,7 @@ with tempfile.TemporaryDirectory() as t:
     lp,lt=touch_layout.read_layout(romfs,'controller/console/mainmenubuttonribbonhd.json'); o=os.path.join(tpad,'pad_ribbon.json'); open(o,'w',encoding='utf-8').write(touch_layout.pad_ribbon(lt)); PR[lp.lower()]=o   # 手柄版主菜单按钮栏：拿掉「电影动画」 | Controller layout main menu button ribbon: remove 「电影动画」(Cinematics)
     lp,lt=touch_layout.read_layout(romfs,'controller/hudmonsterhealthhd.json'); o=os.path.join(tpad,'pad_bosspct.json'); open(o,'w',encoding='utf-8').write(touch_layout.pad_boss_pct(lt)); PR[lp.lower()]=o   # 手柄版怪物血条：加百分比 | Controller layout monster health bar: add the percentage
     lp,lt=touch_layout.read_layout(romfs,'controller/console/characteroptionspanelhd.json'); o=os.path.join(tpad,'pad_charopt.json'); open(o,'w',encoding='utf-8').write(touch_layout.pad_bliss(lt)); PR[lp.lower()]=o   # 手柄版建角模式页：加「极乐世界」一行 | Controller-version character-creation mode page: add the "Elysium" row
-    for rel,fn in (('controller/console/settingspanelhd.json',touch_layout.pad_settings),('controller/console/videooptionspanelhd.json',touch_layout.pad_custom_page)):   # 手柄版选项页：「视频」页签换成「自定义」页 | Controller options page: the "Video" tab is replaced by the "Custom" page
+    for rel,fn in (('controller/console/settingspanelhd.json',touch_layout.pad_settings),):   # 手柄版选项页保留「视频」/ Display | Controller options page retains Video / Display
         lp,lt=touch_layout.read_layout(romfs,rel); o=os.path.join(tpad,'pad_'+rel.replace('/','_')); open(o,'w',encoding='utf-8').write(fn(lt)); PR[lp.lower()]=o
     PR.update(pouch_layout.build(romfs,tpad,PR)[0]); PR.update(wide_stash.build(romfs,tpad,PR)[0])   # 储藏箱 10 → 14 列（编年史仓库第 1 步）：表、底图、宽外框、布局；要在触摸布局之后（储藏箱 / 外框布局叠在那份上） | Stash 10 → 14 columns (chronicle vault step 1): table, base image, wide outer frame, layout; must come after the touch layout (the stash / outer frame layout stacks on that copy)
     cb=Image.open(os.path.join(HERE,'..','NativeHUD','touch','close.png')).convert('RGBA')
@@ -141,17 +143,19 @@ with tempfile.TemporaryDirectory() as t:
                 if not os.path.exists(o): open(o,'wb').write(romfs_art.read(romfs,q))
                 r[k]=o
         return r
-    # 两种模式本来就该共用的（我们自己的页，手柄 / 触屏同一份布局、宿主按模式摆）：编年史三份
-    # 还没分开的存量：两份字号档（开机只读一次）
-    # Meant to be shared by both modes all along (our own pages, one layout for controller / touch, placed by the host according to mode): the three Chronicle ones
-    # Existing stock not yet split: the two font size profiles (read only once at boot)
-    SHARED_TODO=('chroniclebaselistpanelhd.json','chroniclepanelhd.json','controller/_profileconsolehd.json','controller/_profilehandheldhd.json','dropdownlistcontentshd.json')
+    # 两种模式本来就该共用的（我们自己的页，手柄 / 触屏同一份布局、宿主按模式摆）：编年史三份。
+    # Font profiles are boot-selected complete Android overlays; only the large variant changes them.
+    # Meant to be shared by both modes all along (our own pages, one layout for controller / touch, placed by the host
+    # according to mode): the three Chronicle ones. Font profiles are present only in the large overlay variant.
+    SHARED_TODO=('chroniclebaselistpanelhd.json','chroniclepanelhd.json','dropdownlistcontentshd.json')
+    if FONT_LARGE: SHARED_TODO += ('controller/_profileconsolehd.json','controller/_profilehandheldhd.json')
+    if TARGET == 'android': SHARED_TODO += ('keybindingmenuhd.json',)
     PADROOT=touch_layout.build_pad_root(romfs,tpad); PADROOT_KEYS={k[len(LAY):] for k in PADROOT}   # 三份选项页：原路径放手柄那份，触屏那份挪到触屏这边 | The three options pages: the controller copy goes at the original path, the touch copy moves to the touch side
     UNSHARE=('confirmationmodalhd.json','dismissablemodalhd.json','helpbuttonpanelhd.json','npcdialogpanelhd.json','youdiedmodalhd.json')   # 只该给触屏的：挪到触屏这边（见 emit） | Touch-only ones: moved to the touch side (see emit)
     PADLAY={k:v for k,v in PR.items() if touch_path(k)}   # 手柄版只取布局（数据表、图与触屏版同一份） | The controller version takes only layouts (data tables and images are the same copy as the touch version)
     # 手柄专用清单：手柄模式下不是原版字节的布局就这几份，一份不许多、一份不许少（改上面某一行时把相邻一行整行替掉过，商人页的刷新钮就从包里掉了）
     # Controller-only list: these are the only layouts that are not original bytes in controller mode, not one more and not one fewer (once, when a line above was edited, the adjacent line was replaced whole, and the vendor page's refresh button dropped out of the package)
-    PAD_PAGES=('controller/bankexpansionlayouthd.json','controller/console/characteroptionspanelhd.json','controller/console/mainmenubuttonribbonhd.json','controller/console/mainmenupanelhd.json','controller/console/settingspanelhd.json','controller/console/switch/playerinventoryexpansionlayouthd.json','controller/console/videooptionspanelhd.json',
+    PAD_PAGES=('controller/bankexpansionlayouthd.json','controller/console/characteroptionspanelhd.json','controller/console/mainmenubuttonribbonhd.json','controller/console/mainmenupanelhd.json','controller/console/settingspanelhd.json','controller/console/switch/playerinventoryexpansionlayouthd.json',
                'controller/controlleroverlayhd.json','controller/hirelinginventorypanelhd.json','controller/hudmonsterhealthhd.json','controller/messagelogpanelhd.json','controller/pauselayoutgardenhd.json','controller/pauselayouthd.json','controller/vendorpanellayouthd.json')
     if sorted(k[len(LAY):] for k in PADLAY)!=sorted(PAD_PAGES): raise SystemExit('gen_romfs_overlay：手柄专用布局与清单 PAD_PAGES 不一致：多 %s，少 %s' % (sorted(set(k[len(LAY):] for k in PADLAY)-set(PAD_PAGES)), sorted(set(PAD_PAGES)-set(k[len(LAY):] for k in PADLAY))))
     def emit(repl, dst, tag, prebuilt=None):   # repl → 覆盖层（新 .build.config + 一个新数据档）写到 dst/data | repl → overlay (a new .build.config + one new data archive) written to dst/data

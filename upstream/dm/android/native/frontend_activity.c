@@ -234,45 +234,82 @@ static void *progress_watch(void *argument) {
 
 static void copy_asset_as(ANativeActivity *a,const char *directory,const char *asset_name,const char *output_name) {
     AAsset *asset=AAssetManager_open(a->assetManager,asset_name,AASSET_MODE_STREAMING);if(!asset)die("Missing game metadata asset %s",asset_name);
-    char path[1024];snprintf(path,sizeof path,"%s/%s",directory,output_name);FILE *file=fopen(path,"wb");if(!file)die("Game metadata open %s",path);
+    char path[2048];int length=snprintf(path,sizeof path,"%s/%s",directory,output_name);
+    if(length<=0||(size_t)length>=sizeof path)die("Game metadata path too long");
+    FILE *file=fopen(path,"wb");if(!file)die("Game metadata open %s",path);
     char buffer[4096];int n;while((n=AAsset_read(asset,buffer,sizeof buffer))>0)if(fwrite(buffer,1,(size_t)n,file)!=(size_t)n)die("Game metadata write");fclose(file);AAsset_close(asset);
 }
 static void copy_asset(ANativeActivity *a,const char *directory,const char *name) { copy_asset_as(a,directory,name,name); }
-static int migration_asset_exists(ANativeActivity *a,const char *name) {
-    AAsset *asset=AAssetManager_open(a->assetManager,name,AASSET_MODE_STREAMING);if(!asset)return 0;AAsset_close(asset);return 1;
-}
-static int migration_archive_name(ANativeActivity *a,char *name,size_t capacity) {
-    AAsset *asset=AAssetManager_open(a->assetManager,"touch-layout-migration/archive.name",AASSET_MODE_STREAMING);
-    if(!asset)return 0;
-    size_t used=0;int n;
-    while(used+1<capacity&&(n=AAsset_read(asset,name+used,capacity-1-used))>0)used+=(size_t)n;
-    AAsset_close(asset);name[used]=0;name[strcspn(name,"\r\n")]=0;
-    size_t length=strlen(name);
-    return length>5&&length+2<capacity&&!strcmp(name+length-5,".data")&&
-        !strchr(name,'/')&&!strchr(name,'\\')&&strcmp(name,".")&&strcmp(name,"..");
-}
-static void repair_legacy_touch_overlay(ANativeActivity *a,const char *overlay,const char *config) {
-    if(!dm_touch_overlay_is_legacy_install(overlay,config))return;
-    int full=migration_asset_exists(a,"touch-layout-migration/data/build.config");
-    if(!full&&!dm_touch_overlay_needs_repair(overlay,config))return;
-    const char *marker_asset="touch-layout-migration/ctrl_touch",*strings_asset="touch-layout-migration/touch_strings.tsv";
-    char sidecars[1024],layers[2300];int dn=snprintf(sidecars,sizeof sidecars,"%s/touch-layout-migration",a->internalDataPath);
-    if(dn<=0||(size_t)dn>=sizeof sidecars||(mkdir(sidecars,0700)&&errno!=EEXIST)){LOG("[android-overlay-migration] cannot create sidecar directory");return;}
-    if(full){
-        char data[1200],archive[128],asset[1200];
-        int n=snprintf(data,sizeof data,"%s/data",sidecars);
-        if(n<=0||(size_t)n>=sizeof data||(mkdir(data,0700)&&errno!=EEXIST))die("Android HUD migration data directory");
-        copy_asset_as(a,data,"touch-layout-migration/data/build.config",".build.config");
-        if(!migration_archive_name(a,archive,sizeof archive))die("Android HUD migration archive name");
-        n=snprintf(asset,sizeof asset,"touch-layout-migration/data/%s",archive);
-        if(n<=0||(size_t)n>=sizeof asset)die("Android HUD migration archive asset path");
-        copy_asset_as(a,data,asset,archive);
+static int migration_asset_text(ANativeActivity *a,const char *asset_name,char *value,size_t capacity) {
+    if(!capacity)return 0;AAsset *asset=AAssetManager_open(a->assetManager,asset_name,AASSET_MODE_STREAMING);if(!asset)return 0;
+    char buffer[64];size_t used=0;int n;
+    while((n=AAsset_read(asset,buffer,sizeof buffer))>0){
+        if(used+(size_t)n>=capacity){AAsset_close(asset);return 0;}
+        memcpy(value+used,buffer,(size_t)n);used+=(size_t)n;
     }
-    copy_asset_as(a,sidecars,marker_asset,"ctrl_touch");copy_asset_as(a,sidecars,strings_asset,"touch_strings.tsv");
-    int n=snprintf(layers,sizeof layers,"%s:%s",sidecars,overlay);
+    AAsset_close(asset);if(n<0)return 0;value[used]=0;value[strcspn(value,"\r\n")]=0;return 1;
+}
+static int migration_archive_name(ANativeActivity *a,const char *variant,char *name,size_t capacity) {
+    char asset[160];int n=snprintf(asset,sizeof asset,"touch-layout-migration/%s/archive.name",variant);
+    if(n<=0||(size_t)n>=sizeof asset||!migration_asset_text(a,asset,name,capacity))return 0;
+    size_t length=strlen(name);
+    return length>5&&!strcmp(name+length-5,".data")&&!strchr(name,'/')&&!strchr(name,'\\')&&strcmp(name,".")&&strcmp(name,"..");
+}
+static int migration_archive_digest(ANativeActivity *a,const char *variant,char *digest,size_t capacity) {
+    char asset[160];int n=snprintf(asset,sizeof asset,"touch-layout-migration/%s/archive.sha256",variant);
+    if(n<=0||(size_t)n>=sizeof asset||!migration_asset_text(a,asset,digest,capacity))return 0;
+    return strlen(digest)==64&&strspn(digest,"0123456789abcdef")==64;
+}
+static int migration_file_matches(const char *path,const char *expected) {
+    char actual[128];FILE *file=fopen(path,"rb");if(!file)return 0;
+    size_t used=fread(actual,1,sizeof actual-1,file);int good=!ferror(file);fclose(file);
+    actual[used]=0;actual[strcspn(actual,"\r\n")]=0;return good&&!strcmp(actual,expected);
+}
+static int migration_variant_ready(const char *sidecar,const char *archive,const char *digest) {
+    char path[1600];int n=snprintf(path,sizeof path,"%s/archive.name",sidecar);
+    if(n<=0||(size_t)n>=sizeof path||!migration_file_matches(path,archive))return 0;
+    n=snprintf(path,sizeof path,"%s/archive.sha256",sidecar);
+    if(n<=0||(size_t)n>=sizeof path||!migration_file_matches(path,digest))return 0;
+    const char *files[]={"ctrl_touch","touch_strings.tsv","data/.build.config"};
+    for(size_t i=0;i<sizeof files/sizeof *files;i++){n=snprintf(path,sizeof path,"%s/%s",sidecar,files[i]);if(n<=0||(size_t)n>=sizeof path||access(path,R_OK))return 0;}
+    n=snprintf(path,sizeof path,"%s/data/%s",sidecar,archive);
+    return n>0&&(size_t)n<sizeof path&&!access(path,R_OK);
+}
+static void copy_variant_asset(ANativeActivity *a,const char *variant,const char *name,const char *directory,const char *output) {
+    char asset[256];int n=snprintf(asset,sizeof asset,"touch-layout-migration/%s/%s",variant,name);
+    if(n<=0||(size_t)n>=sizeof asset)die("Android HUD migration asset path");
+    copy_asset_as(a,directory,asset,output);
+}
+static void activate_touch_overlay_variant(ANativeActivity *a,const char *overlay,const char *config,int large) {
+    char marker[1400];int n=snprintf(marker,sizeof marker,"%s/ctrl_touch",overlay);
+    int custom=n>0&&(size_t)n<sizeof marker&&access(marker,R_OK)==0;
+    int legacy=dm_touch_overlay_is_legacy_install(overlay,config);
+    if(!custom&&!legacy)return;
+    const char *variant=large?"large":"normal";char archive[128],digest[80];
+    if(!migration_archive_name(a,variant,archive,sizeof archive)||!migration_archive_digest(a,variant,digest,sizeof digest)){
+        LOG("[android-overlay-migration] current Android overlay assets unavailable variant=%s",variant);return;
+    }
+    char root[1200],sidecar[1400],data[1500],layers[2700];
+    n=snprintf(root,sizeof root,"%s/touch-layout-migration",a->internalDataPath);
+    if(n<=0||(size_t)n>=sizeof root||(mkdir(root,0700)&&errno!=EEXIST)){LOG("[android-overlay-migration] cannot create migration root");return;}
+    n=snprintf(sidecar,sizeof sidecar,"%s/%s",root,variant);
+    if(n<=0||(size_t)n>=sizeof sidecar||(mkdir(sidecar,0700)&&errno!=EEXIST)){LOG("[android-overlay-migration] cannot create migration variant");return;}
+    n=snprintf(data,sizeof data,"%s/data",sidecar);
+    if(n<=0||(size_t)n>=sizeof data||(mkdir(data,0700)&&errno!=EEXIST)){LOG("[android-overlay-migration] cannot create migration data directory");return;}
+    if(!migration_variant_ready(sidecar,archive,digest)){
+        copy_variant_asset(a,variant,"ctrl_touch",sidecar,"ctrl_touch");
+        copy_variant_asset(a,variant,"touch_strings.tsv",sidecar,"touch_strings.tsv");
+        copy_variant_asset(a,variant,"data/build.config",data,".build.config");
+        char archive_asset[256];n=snprintf(archive_asset,sizeof archive_asset,"data/%s",archive);
+        if(n<=0||(size_t)n>=sizeof archive_asset)die("Android HUD migration archive asset path");
+        copy_variant_asset(a,variant,archive_asset,data,archive);
+        copy_variant_asset(a,variant,"archive.name",sidecar,"archive.name");
+        copy_variant_asset(a,variant,"archive.sha256",sidecar,"archive.sha256");
+    }
+    n=snprintf(layers,sizeof layers,"%s:%s",sidecar,overlay);
     if(n<=0||(size_t)n>=sizeof layers){LOG("[android-overlay-migration] overlay layer path too long");return;}
     if(setenv("DM_ROMFS_OVERLAY",layers,1)){LOG("[android-overlay-migration] cannot activate sidecar layer");return;}
-    LOG("[android-overlay-migration] repaired legacy touch overlay mode=%s native_HUD=HP_MP_XP_SKILLS; full game package was not reimported",full?"complete-android-overlay":"sidecars-only");
+    LOG("[android-overlay-migration] activated current Android overlay variant=%s source=%s native_HUD=HP_MP_XP_SKILLS; imported game data was not reimported",variant,legacy?"legacy":"custom");
 }
 static void *boot(void *argument) {
     game_app *s=argument;pthread_mutex_lock(&s->lock);
@@ -297,6 +334,11 @@ static void *boot(void *argument) {
         atomic_store(&display_hz,hz);LOG("[android] display maximum refresh=%.3f Hz reported=%d Hz (read-only capability query)",rate,hz);
     }
     Dl_info info;if(!dladdr((void*)boot,&info)||!info.dli_fname)die("Native library directory lookup");char library[1024];snprintf(library,sizeof library,"%s",info.dli_fname);char *slash=strrchr(library,'/');if(!slash)die("Native library path");*slash=0;setenv("DM_ANDROID_LIBDIR",library,1);
+    int temp_length=snprintf(path,sizeof path,"%s/temp",s->activity->internalDataPath);
+    if(temp_length<=0||(size_t)temp_length>=sizeof path||(mkdir(path,0700)&&errno!=EEXIST))die("Android temp directory");
+    setenv("DM_TEMP",path,1);
+    dm_android_launch_settings launch;char launch_error[512];
+    if(!dm_android_launch_settings_apply(path,&launch,launch_error,sizeof launch_error))die("[android] launch settings: %s",launch_error);
     // 导入的数据包优先：启动界面把包解到固定的 d2r-package/ 下，只要 manifest.json 在，就用包里的模块、资源和着色器。
     // 否则回落到默认位置：模块来自 APK 自带 asset，romfs 与 shaders 是手工推送到外部目录的那两份。
     // An imported package wins: the launcher unpacks it into a fixed d2r-package/ directory and, whenever
@@ -316,7 +358,7 @@ static void *boot(void *argument) {
         int overlay_config_length=snprintf(overlay_config,sizeof overlay_config,"%s/d2r-package/romfs_overlay/data/.build.config",s->activity->externalDataPath);
         if(overlay_config_length>0&&(size_t)overlay_config_length<sizeof overlay_config&&access(overlay_config,R_OK)==0){
             int overlay_length=snprintf(overlay_root,sizeof overlay_root,"%s/d2r-package/romfs_overlay",s->activity->externalDataPath);
-            if(overlay_length>0&&(size_t)overlay_length<sizeof overlay_root){setenv("DM_ROMFS_OVERLAY",overlay_root,1);repair_legacy_touch_overlay(s->activity,overlay_root,overlay_config);LOG("[android] imported RomFS overlay enabled: %s",getenv("DM_ROMFS_OVERLAY"));}
+            if(overlay_length>0&&(size_t)overlay_length<sizeof overlay_root){setenv("DM_ROMFS_OVERLAY",overlay_root,1);activate_touch_overlay_variant(s->activity,overlay_root,overlay_config,launch.font_large!=0);LOG("[android] imported RomFS overlay enabled: %s",getenv("DM_ROMFS_OVERLAY"));}
             else unsetenv("DM_ROMFS_OVERLAY");
         }else{unsetenv("DM_ROMFS_OVERLAY");LOG("[android] no imported RomFS overlay; using original game layouts");}
         snprintf(path,sizeof path,"%s/d2r-package/shaders",s->activity->externalDataPath);setenv("DM_VK_SHADERS",path,1);
@@ -348,17 +390,13 @@ static void *boot(void *argument) {
     int cache_path=snprintf(path,sizeof path,"%s/pipeline-cache",s->activity->internalDataPath);
     if(cache_path>0&&(size_t)cache_path<sizeof path&&(!mkdir(path,0700)||errno==EEXIST))setenv("DM_VK_PIPELINE_CACHE_DIR",path,1);
     else{unsetenv("DM_VK_PIPELINE_CACHE_DIR");LOG("[vulkan-pipeline-cache] directory_unavailable=1");}
-    snprintf(path,sizeof path,"%s/temp",s->activity->internalDataPath);mkdir(path,0700);setenv("DM_TEMP",path,1);
     // 异常帧日志与 game.log 同目录，便于一起取回；只作诊断，不参与任何游戏状态。
     // The abnormal-frame log sits beside game.log so both are retrieved together; it is diagnostics only and
     // never part of game state.
     setenv("DM_DATA",s->activity->internalDataPath,1);
-    // 在游戏首次缓存运行档及输入日志之前应用完整验证过的本应用设置。
-    // Apply fully validated application settings before the guest first caches its operation mode and input log.
-    dm_android_launch_settings launch;char launch_error[512];
-    if(!dm_android_launch_settings_apply(path,&launch,launch_error,sizeof launch_error))die("[android] launch settings: %s",launch_error);
-    LOG("[android] launch configuration present=%d operation_mode=%d input_receipts=%d 分辨率=%dx%d present_hz=%d",launch.present,launch.operation_mode,launch.input_receipts,launch.resolution_width,launch.resolution_height,launch.present_hz);
-    // 默认在 120 Hz 面板上将呈现上限设为 60 Hz；用户显式选 0 时仍跟随最高刷新率。
+    LOG("[android] launch configuration present=%d operation_mode=%d input_receipts=%d 分辨率=%dx%d present_hz=%d quality_preset=%d auto=%d-%d diagnostics=%d font_large=%d",launch.present,launch.operation_mode,launch.input_receipts,launch.resolution_width,launch.resolution_height,launch.present_hz,launch.quality_preset,launch.auto_min,launch.auto_max,launch.diagnostics,launch.font_large);
+    if(launch.auto_min>0||launch.auto_max>0)dm_3d_scale_set_auto_bounds(launch.auto_min>0?launch.auto_min:50,launch.auto_max>0?launch.auto_max:100);
+    if(launch.quality_preset>=0)dm_3d_scale_set_preset(launch.quality_preset);
     // Cap presents at 60 Hz by default, including on 120 Hz panels; an explicit 0 still follows the display maximum.
     void dm_present_hz_set(int);
     int present_target=launch.present_hz<0?60:launch.present_hz==0?-1:launch.present_hz;
@@ -366,24 +404,30 @@ static void *boot(void *argument) {
     // 设置生效后立刻记一次环境，确认 DM_GAME_RES 真的传下去了（否则只会在游戏那边看到"未设"）。
     // Immediately record the environment after the settings apply, to confirm DM_GAME_RES really got through;
     // otherwise the only symptom is "unset" on the game side.
-    LOG("[android] 环境核对 DM_OPMODE=%s DM_GAME_RES=%s DM_DEBUG_OVERLAY=%s DM_FONT_LARGE=%s",getenv("DM_OPMODE")?getenv("DM_OPMODE"):"(未设)",getenv("DM_GAME_RES")?getenv("DM_GAME_RES"):"(未设)",getenv("DM_DEBUG_OVERLAY")?getenv("DM_DEBUG_OVERLAY"):"(未设)",getenv("DM_FONT_LARGE")?getenv("DM_FONT_LARGE"):"(未设)");
-    setenv("DM_TACT_PREFETCH","0",1);setenv("DM_BOOTPROF","1",1);setenv("DM_DBG","1",1);
-    setenv("DM_UIMSG","1",1);setenv("DM_MOVIE","1",1);
-    // 音频：真出声是 Android 的缺省；诊断时用 $DM_TEMP/audio_off 标记切成静音接收端。
-    // 静音接收端仍按真实时间消耗缓冲，所以它只去掉声卡通路，不改变游戏节奏。
-    // Audio: real output is the Android default. For diagnosis, a $DM_TEMP/audio_off marker switches to the
-    // silent sink, which still consumes buffers in real time -- it removes the sound card path only.
-    { char flag[1024];snprintf(flag,sizeof flag,"%s/audio_off",getenv("DM_TEMP")?getenv("DM_TEMP"):".");
-      if(access(flag,F_OK)==0){setenv("DM_AUDIO","0",1);LOG("[android] 端口诊断：音频走静音接收端（%s 存在）",flag);} }
-    // 端口侧诊断总开关：从桌面启动时没有环境变量，这里给带上（都只在明确的 DM_PORT_DIAG=1 下才生效）。
-    // Port-side diagnostics master switch: launching from the desktop has no environment variables, so set them
-    // here. They only take effect when DM_PORT_DIAG=1 is explicitly requested.
-    { const char *diag=getenv("DM_PORT_DIAG");
-      if(diag&&*diag&&strcmp(diag,"0")){
+    LOG("[android] 环境核对 DM_OPMODE=%s DM_GAME_RES=%s DM_DEBUG_OVERLAY=%s",getenv("DM_OPMODE")?getenv("DM_OPMODE"):"(未设)",getenv("DM_GAME_RES")?getenv("DM_GAME_RES"):"(未设)",getenv("DM_DEBUG_OVERLAY")?getenv("DM_DEBUG_OVERLAY"):"(未设)");
+    setenv("DM_TACT_PREFETCH","0",1);
+    // 启动时间线/UI消息流/客体调试输出默认关闭，避免每帧与每次IO产生额外计时与写日志开销；
+    // 仅在 launch-settings.conf diagnostics=1 或 DM_PORT_DIAG=1 时打开。
+    // Keep boot timeline / UI message dump / guest debug output off by default to avoid per-call clock/log overhead;
+    // enable only when diagnostics=1 or DM_PORT_DIAG is set.
+    { const char *port_diag=getenv("DM_PORT_DIAG");
+      int diag_env=port_diag&&*port_diag&&strcmp(port_diag,"0");
+      int diag_on=launch.diagnostics==1||diag_env;
+      if(diag_on){
+          setenv("DM_VK_DIAG","1",1);
+          setenv("DM_BOOTPROF","1",1);setenv("DM_DBG","1",1);
+          setenv("DM_UIMSG","1",1);setenv("DM_MOVIE","1",1);
+      }else if(launch.diagnostics==0){
+          unsetenv("DM_VK_DIAG");unsetenv("DM_BOOTPROF");unsetenv("DM_DBG");
+          unsetenv("DM_UIMSG");unsetenv("DM_MOVIE");
+      }
+      if(diag_env){
           setenv("DM_VK_WRITE_TRACE","1",1);      // 宿主写回客体的轨迹（崩溃时打印）| host->guest writeback history, printed on crash
           setenv("DM_VK_TRACE_DISPATCH","1",1);   // compute 派发的分段落点 | step markers around compute dispatch
           setenv("DM_VK_STATIC_UNIFORMS","1",1);  // 单变量：uniform 全静态 | single variable: all-static uniforms
           LOG("[android] 端口诊断开：写回轨迹 + 派发落点 + 静态 uniform");
+      }else if(launch.diagnostics==1){
+          LOG("[android] 诊断模式开（launch-settings diagnostics=1）");
       } }
     __android_log_print(ANDROID_LOG_INFO,"D2RAndroid","Starting real game host; log: %s",log);atomic_store(&s->started,1);
     // 三张派生表（编年史仓库 / 经验 / 亮度）在运行时从 derived.tsv 填：路径是上面才定下来的，晚于库加载时的
@@ -416,9 +460,14 @@ uint64_t front_game_res(int docked) {
     // Log the first three calls: the resolution must be decided at startup (the game builds its window texture from
     // the startup parameter slot), and if the first ask happens before the launch settings take effect, only the
     // first line would hide that — when it goes wrong this shows what was actually read at that moment.
-    int handheld_w,handheld_h;dm_ui_handheld_size((int)w,(int)h,&handheld_w,&handheld_h);
-    if(reported<3){reported++;LOG("[android] 出图档位=%s DM_GAME_RES=%s → 主机档 %ux%u / 掌机档 %ux%u (第%d次)",docked?"主机":"掌机",e&&*e?e:"(未设)",w,h,handheld_w,handheld_h,reported);}
-    return docked?((uint64_t)h<<32)|w:((uint64_t)handheld_h<<32)|(uint32_t)handheld_w;
+    // 客体 UI 排版与剪裁在 main 里按 max(w,1280) x max(h,720) 算；低于 1280x720 会把底栏 HUD 和选项底部按钮裁掉，
+    // 因此主机/掌机档都按原比例保底到至少 1280x720（20:9 最低 1600x720，16:9 最低 1280x720）。
+    int docked_w,docked_h,raw_hh_w,raw_hh_h,handheld_w,handheld_h;
+    dm_ui_clamp_min_size((int)w,(int)h,1280,720,&docked_w,&docked_h);
+    dm_ui_handheld_size((int)w,(int)h,&raw_hh_w,&raw_hh_h);
+    dm_ui_clamp_min_size(raw_hh_w,raw_hh_h,1280,720,&handheld_w,&handheld_h);
+    if(reported<3){reported++;LOG("[android] 出图档位=%s DM_GAME_RES=%s → 主机档 %dx%d / 掌机档 %dx%d (第%d次)",docked?"主机":"掌机",e&&*e?e:"(未设)",docked_w,docked_h,handheld_w,handheld_h,reported);}
+    return docked?((uint64_t)(uint32_t)docked_h<<32)|(uint32_t)docked_w:((uint64_t)(uint32_t)handheld_h<<32)|(uint32_t)handheld_w;
 }
 static int text_input_request(const char *title,const char *sub,const char *guide,const char *initial,int max,char *out,int cap) {
     if(!application||!out||cap<=0)return -1;ANativeActivity *a=application->activity;JNIEnv *env=NULL;int attached=0;
@@ -452,10 +501,27 @@ int front_text_input(const char *title,const char *sub,const char *guide,const c
     int error=pthread_create(&thread,NULL,text_input_worker,&call);if(!error)pthread_join(thread,NULL);
     pthread_mutex_unlock(&text_call_lock);return call.result;
 }
+static pthread_once_t thermal_api_once=PTHREAD_ONCE_INIT;
+static void *(*thermal_acquire)(void);
+static void (*thermal_release)(void *);
+static int (*thermal_status)(void *);
+static void *thermal_manager;
+static void thermal_api_load(void) {
+    void *library=dlopen("libandroid.so",RTLD_NOW|RTLD_LOCAL);
+    if(!library)return;
+    void *sym_acq=dlsym(library,"AThermal_acquireManager");
+    void *sym_rel=dlsym(library,"AThermal_releaseManager");
+    void *sym_sts=dlsym(library,"AThermal_getCurrentThermalStatus");
+    memcpy(&thermal_acquire,&sym_acq,sizeof thermal_acquire);
+    memcpy(&thermal_release,&sym_rel,sizeof thermal_release);
+    memcpy(&thermal_status,&sym_sts,sizeof thermal_status);
+    if(thermal_acquire&&thermal_status)thermal_manager=thermal_acquire();
+}
 int dm_thermal_now(void) {
-    void *library=dlopen("libandroid.so",RTLD_NOW|RTLD_LOCAL);if(!library)return -1;
-    void *(*acquire)(void)=dlsym(library,"AThermal_acquireManager");void (*release)(void*)=dlsym(library,"AThermal_releaseManager");int (*status)(void*)=dlsym(library,"AThermal_getCurrentThermalStatus");int result=-1;
-    if(acquire&&release&&status){void *manager=acquire();if(manager){int v=status(manager);result=v<0?-1:v==0?0:v<=2?1:v==3?2:3;release(manager);}}dlclose(library);return result;
+    pthread_once(&thermal_api_once,thermal_api_load);
+    if(!thermal_manager||!thermal_status)return -1;
+    int v=thermal_status(thermal_manager);
+    return v<0?-1:v==0?0:v<=2?1:v==3?2:3;
 }
 // 模式变化告诉 Java：屏幕虚拟手柄是应用内 PopupWindow（原生 Vulkan 直接拥有 Activity 窗口），
 // 显隐只能由 Java 侧改。只在主线程调用（输入队列就挂在主 Looper 上）。
@@ -698,14 +764,24 @@ __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivit
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setQualityPreset(JNIEnv *env,jclass klass,jint preset) {
     (void)env;(void)klass;dm_3d_scale_set_preset((int)preset);
 }
+__attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setAutoBounds(JNIEnv *env,jclass klass,jint min_pct,jint max_pct) {
+    (void)env;(void)klass;dm_3d_scale_set_auto_bounds((int)min_pct,(int)max_pct);
+}
+__attribute__((visibility("default"))) jintArray Java_org_d2r_android_port_D2RActivity_getRenderReadout(JNIEnv *env,jclass klass) {
+    (void)klass;
+    uint32_t w3d=0,h3d=0,wout=0,hout=0;
+    dm_3d_render_dims(&w3d,&h3d,&wout,&hout);
+    int scale_pct=(int)(dm_3d_scale_cur()*100.0f+0.5f);
+    jint values[5]={scale_pct,(jint)w3d,(jint)h3d,(jint)wout,(jint)hout};
+    jintArray out=(*env)->NewIntArray(env,5);
+    if(out)(*env)->SetIntArrayRegion(env,out,0,5,values);
+    return out;
+}
 // 帧率目标：>0 固定帧率，<0 跟随屏幕最高刷新率。运行中可改，下一次出图生效。
 // The frame rate target: >0 a fixed rate, <0 follow the screen's maximum refresh rate. It can change at run time and
 // takes effect on the next present.
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setPresentHz(JNIEnv *env,jclass klass,jint hz) {
     (void)env;(void)klass;void dm_present_hz_set(int);dm_present_hz_set((int)hz);
-}
-__attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setFontLarge(JNIEnv *env,jclass klass,jboolean large) {
-    (void)env;(void)klass;dm_ui_font_large_request(large?1:0);
 }
 extern void mtl_buffer_cache_trim(void);
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_trimGpuBuffers(JNIEnv *env,jclass klass) {
@@ -979,6 +1055,8 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
         {"setPadMode","(IZ)V",(void*)Java_org_d2r_android_port_D2RActivity_setPadMode},
         {"setOverlayEnabled","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setOverlayEnabled},
         {"setQualityPreset","(I)V",(void*)Java_org_d2r_android_port_D2RActivity_setQualityPreset},
+        {"setAutoBounds","(II)V",(void*)Java_org_d2r_android_port_D2RActivity_setAutoBounds},
+        {"getRenderReadout","()[I",(void*)Java_org_d2r_android_port_D2RActivity_getRenderReadout},
         {"setPresentHz","(I)V",(void*)Java_org_d2r_android_port_D2RActivity_setPresentHz},
         {"trimGpuBuffers","()V",(void*)Java_org_d2r_android_port_D2RActivity_trimGpuBuffers},
         {"setMenuOpen","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setMenuOpen},

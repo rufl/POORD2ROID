@@ -24,6 +24,7 @@ import android.util.Log;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.ScrollView;
 import android.widget.FrameLayout;
 import android.widget.PopupWindow;
 import android.widget.Toast;
@@ -74,15 +75,15 @@ public final class D2RActivity extends NativeActivity {
     private static native void setPadMode(int pad, boolean present);
     private static native void setOverlayEnabled(boolean enabled);
     private static native void setQualityPreset(int preset);
+    private static native void setAutoBounds(int minPct, int maxPct);
+    private static native int[] getRenderReadout();
     // 帧率目标：>0 固定帧率，<0 跟随屏幕最高刷新率。运行中可改，下一次出图生效。
     // The frame rate target: >0 a fixed rate, <0 follow the screen's maximum refresh rate. It can change at run time
     // and takes effect on the next present.
     private static native void setPresentHz(int hz);
-    private static native void setFontLarge(boolean large);
     private static native void setMenuOpen(boolean open);
     private static native void setSkipSaveOnExit(boolean skip);
     private static native void trimGpuBuffers();
-
     // 存档导入/导出的文件选择器请求码（与文本输入等其它结果回调区分开）。
     // Request codes for the save pickers, kept apart from the other result callbacks.
     private static final int EXPORT_SAVE = 21;
@@ -97,20 +98,21 @@ public final class D2RActivity extends NativeActivity {
     // easy to hit by accident and would quit the whole run. So back opens this menu instead: frame rate display /
     // on-screen controls / quality / exit game. Press back again (or tap outside) to close it.
     private PopupWindow menuPopup;
-    private TextView menuOverlayRow, menuControlsRow, menuQualityRow, menuFrameRateRow, menuFontLabel;
+    private TextView menuOverlayRow, menuControlsRow, menuQualityRow, menuAutoRangeRow, menuFrameRateRow, menuRenderNowRow, menuDiagnosticsRow, menuFontLabel, menuFontMinus, menuFontPlus;
     private boolean fontLarge;
+    private boolean handheldProfile = true;
+    private boolean diagnosticsEnabled;
     private boolean overlayEnabled = true;
     private boolean controlsEnabled = true;
     private int qualityPreset;                                  // 0 自动 / 1 高质量 / 2 平衡 / 3 性能 / 4 超性能 | 0 auto / 1 high / 2 balanced / 3 performance / 4 ultra performance
     private static final int[] QUALITY_LEVELS = {-1, 0, 1, 2, 3}; // 与 native 约定：-1 自动、0 高、1 平衡、2 性能、3 超性能 | the native contract
-    // 帧率档：30 / 60 / 跟随屏幕（-1 = 跟随屏幕最高刷新率）。
-    // 默认上限 30 帧；可在游戏内切换 60 或跟随屏幕。它是上限，不保证 GPU 忙时达到目标。
-    // Default cap: 30 fps; switch to 60 or follow the display in-game. This is a cap, not a promise under GPU load.
-    // Frame-rate presets: 30 / 60 / follow the display maximum.
-    private static final int[] PRESENT_HZ_VALUES = {30, 60, -1};
-    private int presentHzIndex = 0;
+    private static final int[][] AUTO_BOUNDS_PRESETS = {{50, 100}, {60, 100}, {70, 100}, {60, 85}, {75, 100}};
+    private int autoBoundsIndex;
+    // 帧率档：30 / 40(仅120Hz面板) / 60 / 跟随屏幕（-1 = 跟随屏幕最高刷新率）。
+    // Default cap: 60 fps; 40 fps is only offered when the display supports 120 Hz.
+    private int[] presentHzValues = {30, 60, -1};
+    private int presentHzIndex = 1;
     private static final String[] QUALITY_KEYS = {"dmAndroidMenuQualityAuto", "dmAndroidMenuQualityHigh", "dmAndroidMenuQualityBalanced", "dmAndroidMenuQualityPerformance", "dmAndroidMenuQualityUltra"};
-    // 与启动界面同一套配色（那边是 GOLD/PARCHMENT），菜单里照用，视觉上是一家人。
     // The same palette as the launcher (GOLD/PARCHMENT there), so the menu looks like part of the same app.
     private static final int GOLD = 0xffe8c078;
     private static final int PARCHMENT = 0xffe8e0d0;
@@ -154,8 +156,8 @@ public final class D2RActivity extends NativeActivity {
         float density = getResources().getDisplayMetrics().density;
         TextView view = new TextView(this);
         view.setTextColor(PARCHMENT);
-        view.setTextSize(17);
-        view.setPadding((int)(10 * density), (int)(9 * density), (int)(10 * density), (int)(9 * density));
+        view.setTextSize(15.5f);
+        view.setPadding((int)(10 * density), (int)(7 * density), (int)(10 * density), (int)(7 * density));
         view.setClickable(true);
         return view;
     }
@@ -165,11 +167,11 @@ public final class D2RActivity extends NativeActivity {
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
         column.setBackgroundColor(0xf0131317);
-        column.setPadding((int)(20 * density), (int)(16 * density), (int)(20 * density), (int)(16 * density));
+        column.setPadding((int)(16 * density), (int)(12 * density), (int)(16 * density), (int)(12 * density));
         TextView title = new TextView(this);
         title.setText(text("dmAndroidMenuTitle"));
         title.setTextColor(GOLD);
-        title.setTextSize(19);
+        title.setTextSize(18);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setPadding((int)(10 * density), 0, (int)(10 * density), (int)(4 * density));
         column.addView(title);
@@ -186,30 +188,57 @@ public final class D2RActivity extends NativeActivity {
         menuControlsRow.setOnClickListener(v -> { controlsEnabled = !controlsEnabled; updateTouchVisibility(); updateMenuLabels(); });
         column.addView(menuControlsRow);
         menuQualityRow = menuRow();
-        menuQualityRow.setOnClickListener(v -> { qualityPreset = (qualityPreset + 1) % QUALITY_KEYS.length; setQualityPreset(QUALITY_LEVELS[qualityPreset]); updateMenuLabels(); });
+        menuQualityRow.setOnClickListener(v -> { qualityPreset = (qualityPreset + 1) % QUALITY_KEYS.length; applyQualityPreset(); updateMenuLabels(); });
         column.addView(menuQualityRow);
+        menuAutoRangeRow = menuRow();
+        menuAutoRangeRow.setOnClickListener(v -> { autoBoundsIndex = (autoBoundsIndex + 1) % AUTO_BOUNDS_PRESETS.length; applyAutoBounds(); updateMenuLabels(); });
+        column.addView(menuAutoRangeRow);
         // 帧率：出图节拍（60 帧是缺省；「跟随屏幕」在高刷屏上按屏幕的刷新率走）。
         // Frame rate: the present rate (60 by default; "follow the screen" uses the screen's refresh rate).
         menuFrameRateRow = menuRow();
-        menuFrameRateRow.setOnClickListener(v -> { presentHzIndex = (presentHzIndex + 1) % PRESENT_HZ_VALUES.length; applyPresentHz(); updateMenuLabels(); });
+        menuFrameRateRow.setOnClickListener(v -> { presentHzIndex = (presentHzIndex + 1) % presentHzValues.length; applyPresentHz(); updateMenuLabels(); });
         column.addView(menuFrameRateRow);
+        menuRenderNowRow = menuRow();
+        menuRenderNowRow.setTextColor(GOLD);
+        menuRenderNowRow.setTextSize(13.5f);
+        menuRenderNowRow.setClickable(false);
+        column.addView(menuRenderNowRow);
+        menuDiagnosticsRow = menuRow();
+        menuDiagnosticsRow.setOnClickListener(v -> { diagnosticsEnabled = !diagnosticsEnabled; persistDiagnostics(); updateMenuLabels(); });
+        column.addView(menuDiagnosticsRow);
         LinearLayout fontRow = new LinearLayout(this);
         fontRow.setOrientation(LinearLayout.HORIZONTAL);
-        TextView minus = menuRow();
-        minus.setText("−");
-        minus.setGravity(Gravity.CENTER);
-        minus.setOnClickListener(v -> setFontLevel(false));
-        fontRow.addView(minus, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        fontRow.setGravity(Gravity.CENTER_VERTICAL);
+        int fontPadV = (int)(7 * density), fontPadH = (int)(12 * density);
         menuFontLabel = menuRow();
-        menuFontLabel.setGravity(Gravity.CENTER);
+        menuFontLabel.setSingleLine(true);
         menuFontLabel.setClickable(false);
-        fontRow.addView(menuFontLabel, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 3f));
-        TextView plus = menuRow();
-        plus.setText("+");
-        plus.setGravity(Gravity.CENTER);
-        plus.setOnClickListener(v -> setFontLevel(true));
-        fontRow.addView(plus, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        column.addView(fontRow);
+        fontRow.addView(menuFontLabel, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        menuFontMinus = menuRow();
+        menuFontMinus.setText("−");
+        menuFontMinus.setGravity(Gravity.CENTER);
+        menuFontMinus.setMinWidth((int)(36 * density));
+        menuFontMinus.setPadding(fontPadH, fontPadV, fontPadH, fontPadV);
+        menuFontMinus.setBackgroundColor(0x26ffffff);
+        menuFontMinus.setOnClickListener(v -> setFontLevel(false));
+        LinearLayout.LayoutParams minusParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        minusParams.setMarginStart((int)(10 * density));
+        fontRow.addView(menuFontMinus, minusParams);
+        menuFontPlus = menuRow();
+        menuFontPlus.setText("+");
+        menuFontPlus.setGravity(Gravity.CENTER);
+        menuFontPlus.setMinWidth((int)(36 * density));
+        menuFontPlus.setPadding(fontPadH, fontPadV, fontPadH, fontPadV);
+        menuFontPlus.setBackgroundColor(0x26ffffff);
+        menuFontPlus.setOnClickListener(v -> setFontLevel(true));
+        LinearLayout.LayoutParams plusParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        plusParams.setMarginStart((int)(6 * density));
+        fontRow.addView(menuFontPlus, plusParams);
+        column.addView(fontRow, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         // 存档导入 / 导出：走系统的文件选择器，导出到玩家选的位置（下载目录等），导入也是玩家选文件。
         // Save import/export goes through the system file picker: export writes to wherever the player picks
         // (Downloads and so on), import reads a file the player picks.
@@ -229,7 +258,13 @@ public final class D2RActivity extends NativeActivity {
         // window, then end the process).
         exitRow.setOnClickListener(v -> { Log.i("D2RAndroid", "[menu] exit row tapped"); hideMenu(); finish(); });
         column.addView(exitRow);
-        menuPopup = new PopupWindow(column, LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, true);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(0xf0131317);
+        scroll.setVerticalScrollBarEnabled(true);
+        scroll.setScrollbarFadingEnabled(false);
+        scroll.addView(column, new ScrollView.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        menuPopup = new PopupWindow(scroll, LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, true);
         // 透明背景 + 可点外面：点菜单以外的地方就收起；焦点交给菜单，这样返回键先被菜单吃掉。
         // Transparent background plus outside-touchable: tapping elsewhere closes it, and giving the popup focus is
         // what lets it consume the back key first.
@@ -238,28 +273,55 @@ public final class D2RActivity extends NativeActivity {
         menuPopup.setOnDismissListener(() -> setMenuOpen(false));
     }
 
+    private String profilePrefix() {
+        return handheldProfile ? "handheld_" : "console_";
+    }
+
+    private String readProfileSetting(String key) {
+        File file = configFile();
+        if (file == null) return null;
+        String scoped = LaunchSettings.read(file, profilePrefix() + key);
+        return scoped != null ? scoped : LaunchSettings.read(file, key);
+    }
+
     private void updateMenuLabels() {
         if (menuOverlayRow == null) return;
         String on = text("dmAndroidMenuOn"), off = text("dmAndroidMenuOff");
         menuOverlayRow.setText(text("dmAndroidMenuOverlay") + "：" + (overlayEnabled ? on : off));
         menuControlsRow.setText(text("dmAndroidMenuControls") + "：" + (controlsEnabled ? on : off));
         menuQualityRow.setText(text("dmAndroidMenuQuality") + "：" + text(QUALITY_KEYS[qualityPreset]));
+        if (menuAutoRangeRow != null) {
+            int[] b = AUTO_BOUNDS_PRESETS[autoBoundsIndex];
+            menuAutoRangeRow.setText(text("dmAndroidMenuAutoRange") + "：" + b[0] + "–" + b[1] + "%");
+            menuAutoRangeRow.setAlpha(QUALITY_LEVELS[qualityPreset] < 0 ? 1.0f : 0.55f);
+        }
         if (menuFrameRateRow != null) menuFrameRateRow.setText(text("dmAndroidMenuFrameRate") + "：" + frameRateLabel());
+        if (menuRenderNowRow != null) {
+            int[] r = getRenderReadout();
+            String modeTag = text(handheldProfile ? "dmAndroidLaunchHandheld" : "dmAndroidLaunchConsole").split(" ")[0];
+            String detail = (r != null && r.length >= 5 && r[1] > 0 && r[3] > 0)
+                ? (r[0] + "% · " + r[1] + "×" + r[2] + " → " + r[3] + "×" + r[4] + " (" + modeTag + ")")
+                : ((r != null && r.length >= 1 ? r[0] : 100) + "% (" + modeTag + ")");
+            menuRenderNowRow.setText(text("dmAndroidMenuRenderNow") + "：" + detail);
+        }
+        if (menuDiagnosticsRow != null) menuDiagnosticsRow.setText(text("dmAndroidMenuDiagnostics") + "：" + (diagnosticsEnabled ? on : off));
         if (menuFontLabel != null) menuFontLabel.setText(text("dmAndroidMenuFont") + "：" +
             text(fontLarge ? "dmAndroidMenuFontLarge" : "dmAndroidMenuFontNormal"));
+        if (menuFontMinus != null) menuFontMinus.setAlpha(fontLarge ? 1.0f : 0.45f);
+        if (menuFontPlus != null) menuFontPlus.setAlpha(fontLarge ? 0.45f : 1.0f);
     }
 
     // 帧率档的当前值与它的写法（配置里同一个键：0 = 跟随屏幕，其余是固定帧率）。
     // The frame rate preset's current value and how it is written (the same key in the configuration: 0 = follow the
     // screen, otherwise a fixed rate).
     private String frameRateLabel() {
-        int hz = PRESENT_HZ_VALUES[presentHzIndex];
+        int hz = presentHzValues[presentHzIndex];
         if (hz < 0) return text("dmAndroidMenuFpsFollow");
         return hz + " " + text("dmAndroidMenuFpsUnit");
     }
 
     private String presentHzSetting() {
-        int hz = PRESENT_HZ_VALUES[presentHzIndex];
+        int hz = presentHzValues[presentHzIndex];
         return hz < 0 ? "0" : String.valueOf(hz);
     }
 
@@ -267,19 +329,41 @@ public final class D2RActivity extends NativeActivity {
     // Apply the frame rate preset: tell the native side at once (effective on the next present) and write it back so
     // the next launch starts with the same preset.
     private void applyPresentHz() {
-        setPresentHz(PRESENT_HZ_VALUES[presentHzIndex]);
+        setPresentHz(presentHzValues[presentHzIndex]);
         File file = configFile();
-        if (file != null) LaunchSettings.write(file, "present_hz", presentHzSetting());
-        Log.i("D2RAndroid", "[fps] target=" + presentHzSetting() + " Hz");
+        if (file != null) LaunchSettings.write(file, profilePrefix() + "present_hz", presentHzSetting());
+        Log.i("D2RAndroid", "[fps] profile=" + (handheldProfile ? "handheld" : "console") + " target=" + presentHzSetting() + " Hz");
     }
 
+    private void applyQualityPreset() {
+        int preset = QUALITY_LEVELS[qualityPreset];
+        setQualityPreset(preset);
+        File file = configFile();
+        if (file != null) LaunchSettings.write(file, profilePrefix() + "quality_preset", String.valueOf(preset));
+        Log.i("D2RAndroid", "[quality] profile=" + (handheldProfile ? "handheld" : "console") + " preset=" + preset);
+    }
+
+    private void applyAutoBounds() {
+        int[] b = AUTO_BOUNDS_PRESETS[autoBoundsIndex];
+        setAutoBounds(b[0], b[1]);
+        File file = configFile();
+        if (file != null) {
+            LaunchSettings.write(file, profilePrefix() + "auto_min", String.valueOf(b[0]));
+            LaunchSettings.write(file, profilePrefix() + "auto_max", String.valueOf(b[1]));
+        }
+        Log.i("D2RAndroid", "[quality] profile=" + (handheldProfile ? "handheld" : "console") + " auto_bounds=" + b[0] + "-" + b[1] + "%");
+    }
+
+    private void persistDiagnostics() {
+        File file = configFile();
+        if (file != null) LaunchSettings.write(file, "diagnostics", diagnosticsEnabled ? "1" : "0");
+    }
     private void setFontLevel(boolean large) {
         if (fontLarge == large) return;
         fontLarge = large;
-        setFontLarge(large);
         File file = configFile();
         if (file != null) LaunchSettings.write(file, "font_large", large ? "1" : "0");
-        Log.i("D2RAndroid", "[font] requested native level=" + (large ? "large" : "normal"));
+        Log.i("D2RAndroid", "[font] overlay profile stored for next launch=" + (large ? "large" : "normal"));
         updateMenuLabels();
     }
 
@@ -435,6 +519,7 @@ public final class D2RActivity extends NativeActivity {
                 Display.Mode current = display == null ? null : display.getMode();
                 int selected = 0;
                 float bestDifference = Float.MAX_VALUE;
+                float selectedRate = requested;
                 if (requested > 0 && current != null) {
                     for (Display.Mode mode : display.getSupportedModes()) {
                         if (mode.getPhysicalWidth() != current.getPhysicalWidth() ||
@@ -446,12 +531,26 @@ public final class D2RActivity extends NativeActivity {
                             (difference == bestDifference && mode.getModeId() == current.getModeId()))) {
                             selected = mode.getModeId();
                             bestDifference = difference;
+                            selectedRate = mode.getRefreshRate();
+                        }
+                    }
+                    // 40 fps on a 120 Hz display divides 120 Hz evenly; keep the 120 Hz mode active rather than dropping to 60 Hz.
+                    if (selected == 0 && Math.abs(requested - 40.0f) <= 0.1f) {
+                        for (Display.Mode mode : display.getSupportedModes()) {
+                            if (mode.getPhysicalWidth() != current.getPhysicalWidth() ||
+                                mode.getPhysicalHeight() != current.getPhysicalHeight()) continue;
+                            float rate = mode.getRefreshRate();
+                            if (rate >= 119.0f && Math.abs(rate % 40.0f) <= 1.0f &&
+                                (selected == 0 || rate < selectedRate)) {
+                                selected = mode.getModeId();
+                                selectedRate = rate;
+                            }
                         }
                     }
                 }
                 WindowManager.LayoutParams attributes = getWindow().getAttributes();
                 attributes.preferredDisplayModeId = selected;
-                attributes.preferredRefreshRate = requested;
+                attributes.preferredRefreshRate = selectedRate;
                 getWindow().setAttributes(attributes);
                 Log.i("D2RAndroid", "[android-display-preference] requested=" + requested +
                     " modeId=" + selected + " previousMode=" + (current == null ? 0 : current.getModeId()) +
@@ -477,15 +576,37 @@ public final class D2RActivity extends NativeActivity {
         // 菜单里「帧率显示」的当前值：与 native 启动时读的是同一个键，**缺省关闭**（只有明确写 1 才是开）。
         // The menu's "frame rate display" starts from the same key native reads at startup; **off by default**
         // (only an explicit 1 means on).
+        handheldProfile = !"console".equals(LaunchSettings.read(configFile(), "operation_mode"));
+        boolean supports120 = getMaximumDisplayRefreshRate() >= 119.0f;
+        presentHzValues = supports120 ? new int[]{30, 40, 60, -1} : new int[]{30, 60, -1};
+        presentHzIndex = supports120 ? 2 : 1;
         String overlaySetting = LaunchSettings.read(configFile(), "debug_overlay");
         overlayEnabled = overlaySetting != null && overlaySetting.equals("1");
-        fontLarge = "1".equals(LaunchSettings.read(configFile(), "font_large"));
+        diagnosticsEnabled = "1".equals(LaunchSettings.read(configFile(), "diagnostics"));
+        String fontSetting = LaunchSettings.read(configFile(), "font_large");
+        fontLarge = fontSetting == null || fontSetting.equals("1");
+        String qualitySetting = readProfileSetting("quality_preset");
+        if (qualitySetting != null) {
+            for (int i = 0; i < QUALITY_LEVELS.length; i++) {
+                if (qualitySetting.equals(String.valueOf(QUALITY_LEVELS[i]))) { qualityPreset = i; break; }
+            }
+        }
+        String minSetting = readProfileSetting("auto_min"), maxSetting = readProfileSetting("auto_max");
+        if (minSetting != null || maxSetting != null) {
+            try {
+                int minV = minSetting != null ? Integer.parseInt(minSetting) : 50;
+                int maxV = maxSetting != null ? Integer.parseInt(maxSetting) : 100;
+                for (int i = 0; i < AUTO_BOUNDS_PRESETS.length; i++) {
+                    if (AUTO_BOUNDS_PRESETS[i][0] == minV && AUTO_BOUNDS_PRESETS[i][1] == maxV) { autoBoundsIndex = i; break; }
+                }
+            } catch (NumberFormatException ignored) { }
+        }
         // 帧率档：配置里写了就按配置；缺省上限为 60 Hz。原生启动与这里的菜单标签使用同一设置。
         // Use the saved frame-rate preset when present; default to a 60 Hz cap. Native startup and this menu label share the setting.
-        String hzSetting = LaunchSettings.read(configFile(), "present_hz");
+        String hzSetting = readProfileSetting("present_hz");
         if (hzSetting != null) {
-            for (int i = 0; i < PRESENT_HZ_VALUES.length; i++) {
-                int hz = PRESENT_HZ_VALUES[i];
+            for (int i = 0; i < presentHzValues.length; i++) {
+                int hz = presentHzValues[i];
                 if (hzSetting.equals(hz < 0 ? "0" : String.valueOf(hz))) { presentHzIndex = i; break; }
             }
         }

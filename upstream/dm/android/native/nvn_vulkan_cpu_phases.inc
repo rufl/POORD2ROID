@@ -61,7 +61,19 @@ static void dm_cpu_phase_report(uint64_t frames) {
 // file, so a reproduction can be read straight from it instead of searching the whole game log.
 // 每帧只做十几次减法与两次比较，写文件只在异常帧发生。
 // Each frame costs a handful of subtractions and two comparisons; the file is written only on abnormal frames.
-enum { DM_ABNORMAL_INTERVAL_NS = 20000000 };
+enum { DM_ABNORMAL_INTERVAL_NS = 20000000, DM_ABNORMAL_CPU_NS = 25000000 };
+static int dm_abnormal_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *env = getenv("DM_VK_ABNORMAL");
+        if (env && *env) enabled = strcmp(env, "0") != 0;
+        else {
+            const char *diag = getenv("DM_VK_DIAG");
+            enabled = (diag && *diag && strcmp(diag, "0") != 0) || perf_config_int("abnormal_frames", 0) != 0 || perf_config_int("diagnostics", 0) != 0;
+        }
+    }
+    return enabled;
+}
 static FILE *dm_abnormal_file;
 static int dm_abnormal_failed;
 static uint64_t dm_abnormal_previous_ns[DM_CPU_PHASE_COUNT],dm_abnormal_previous_calls[DM_CPU_PHASE_COUNT];
@@ -118,41 +130,53 @@ static long dm_abnormal_fastest_core_khz(void) {
     }
     return fastest;
 }
-// 每个出图边界取一次本帧分段差；异常帧才落盘，正常帧只有这些减法。
-// Take this frame's phase deltas at every present boundary; only abnormal frames reach the disk, normal frames cost only these subtractions.
-static void dm_abnormal_frame(uint64_t frame, uint64_t interval_ns, uint64_t cpu_ns, uint64_t gpu_ns,
-                              uint64_t draws, uint64_t passes, uint64_t uploads,
+static void dm_abnormal_sample_khz(uint64_t now_ns, long *this_khz, long *fastest_khz) {
+    static uint64_t last_sample_ns;
+    static long cached_this = -1, cached_fastest = -1;
+    if (!last_sample_ns || now_ns < last_sample_ns || now_ns - last_sample_ns >= 250000000ull) {
+        cached_this = dm_abnormal_this_core_khz();
+        cached_fastest = dm_abnormal_fastest_core_khz();
+        last_sample_ns = now_ns;
+    }
+    *this_khz = cached_this;
+    *fastest_khz = cached_fastest;
+}
+// 每个出图边界取一次本帧分段差；默认关闭，显式诊断开启时才记录，并按目标帧周期放大阈值、限频采样 cpufreq。
+// Sample phase deltas only when abnormal-frame diagnostics are enabled; scale threshold above target period and rate-limit cpufreq reads.
+static void dm_abnormal_frame(uint64_t frame, uint64_t now_ns, uint64_t interval_ns, uint64_t cpu_ns, uint64_t gpu_ns,
+                              uint64_t target_period_ns, uint64_t draws, uint64_t passes, uint64_t uploads,
                               uint64_t ubo_bytes, uint64_t ubo_misses, uint64_t descriptor_misses) {
-    if(dm_cpu_phases_enabled)for (unsigned phase = 0; phase < DM_CPU_PHASE_COUNT; phase++) {
+    if (!dm_abnormal_enabled()) return;
+    if (dm_cpu_phases_enabled) for (unsigned phase = 0; phase < DM_CPU_PHASE_COUNT; phase++) {
         dm_abnormal_frame_ns[phase] = dm_cpu_phase_ns[phase] - dm_abnormal_previous_ns[phase];
         dm_abnormal_previous_ns[phase] = dm_cpu_phase_ns[phase];
         dm_abnormal_frame_calls[phase] = dm_cpu_phase_calls[phase] - dm_abnormal_previous_calls[phase];
         dm_abnormal_previous_calls[phase] = dm_cpu_phase_calls[phase];
     }
     dm_abnormal_frames++;
-    // 三条计数在游戏里是累计值；日志要的是本帧发生量，所以这里取差。
-    // The three counters are cumulative in the game; the log wants this frame's own amount, so take the difference.
     static uint64_t previous_draws, previous_passes, previous_uploads;
     uint64_t frame_draws = draws - previous_draws, frame_passes = passes - previous_passes, frame_uploads = uploads - previous_uploads;
     previous_draws = draws; previous_passes = passes; previous_uploads = uploads;
-    // 读取字节数与未命中次数一起记：分段变慢时才能分清是「每次搬的字节更多」还是「同样的活变慢」。
-    // Byte counts and miss counts go in together: when a phase slows down, that separates "more bytes per call"
-    // from "the same work running slower".
     static uint64_t previous_ubo_bytes, previous_ubo_misses, previous_descriptor_misses;
     uint64_t frame_ubo_bytes = ubo_bytes - previous_ubo_bytes, frame_ubo_misses = ubo_misses - previous_ubo_misses, frame_descriptor_misses = descriptor_misses - previous_descriptor_misses;
     previous_ubo_bytes = ubo_bytes; previous_ubo_misses = ubo_misses; previous_descriptor_misses = descriptor_misses;
-    if (interval_ns < DM_ABNORMAL_INTERVAL_NS && cpu_ns < DM_ABNORMAL_INTERVAL_NS) return;
+    uint64_t interval_limit = DM_ABNORMAL_INTERVAL_NS;
+    if (target_period_ns > 0) {
+        uint64_t scaled = target_period_ns + target_period_ns / 3;
+        if (scaled > interval_limit) interval_limit = scaled;
+    }
+    if (interval_ns < interval_limit && cpu_ns < DM_ABNORMAL_CPU_NS) return;
     dm_abnormal_open();
     if (!dm_abnormal_file) return;
     dm_abnormal_records++;
+    long this_khz = -1, fastest_khz = -1;
+    dm_abnormal_sample_khz(now_ns, &this_khz, &fastest_khz);
     fprintf(dm_abnormal_file, "帧 %llu 间隔 %.2f ms CPU %.2f ms GPU %.2f ms 绘制 %llu 通道 %llu 贴图上传 %llu UBO读取 %.0f KiB/变更 %llu 描述符未命中 %llu 本核 %ld kHz 最快核 %ld kHz\n",
             (unsigned long long)frame, interval_ns / 1e6, cpu_ns / 1e6, gpu_ns / 1e6,
             (unsigned long long)frame_draws, (unsigned long long)frame_passes, (unsigned long long)frame_uploads,
             frame_ubo_bytes / 1024., (unsigned long long)frame_ubo_misses, (unsigned long long)frame_descriptor_misses,
-            dm_abnormal_this_core_khz(), dm_abnormal_fastest_core_khz());
-    // 每条都带本帧调用次数：耗时涨了要能立刻分清「活变多了」还是「每次变慢了」。
-    // Every entry carries this frame's call count: when a cost rises, that tells "more work" from "slower per call" at a glance.
-    if(dm_cpu_phases_enabled){
+            this_khz, fastest_khz);
+    if (dm_cpu_phases_enabled) {
         char line[1024]; size_t used = 0;
         for (unsigned phase = 0; phase < DM_CPU_PHASE_COUNT; phase++) {
             int written = snprintf(line + used, sizeof line - used, "%s%s=%.3f/%llu", phase ? " " : "",
@@ -162,6 +186,6 @@ static void dm_abnormal_frame(uint64_t frame, uint64_t interval_ns, uint64_t cpu
             used += (size_t)written;
         }
         fprintf(dm_abnormal_file, "  %s\n", line);
-    }else fprintf(dm_abnormal_file,"  cpu_phases=disabled\n");
-    fflush(dm_abnormal_file);
+    } else fprintf(dm_abnormal_file, "  cpu_phases=disabled\n");
+    if (dm_abnormal_records <= 4 || (dm_abnormal_records & 15u) == 0) fflush(dm_abnormal_file);
 }

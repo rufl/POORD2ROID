@@ -1539,12 +1539,13 @@ void dm_perf_present(double iv) {   // 出图线程每帧调一次（滞后 8 �
     if (!init) { init = 1; const char *e = getenv("DM_PERF_FILE"); path = e ? (strcmp(e, "0") ? e : NULL) : (TARGET_OS_IPHONE ? "perf.txt" : NULL); t0 = tstart = now_ns(); f0 = dm_nvn_frame_count(); cpu0 = dm_nvn_sub_cpu_ns(); }
 #ifdef __ANDROID__
     static unsigned gpu_sample_count;
-    static double gpu_sample_ms = -1;
+    static double gpu_sample_ms = -1, cpu_sample_ms = -1;
     if ((gpu_sample_count++ & 15u) == 0) {
         dm_android_debug_stats gpu_stats; dm_android_debug_get(&gpu_stats);
         gpu_sample_ms = gpu_stats.gpu_valid ? gpu_stats.gpu_ms : -1;
+        cpu_sample_ms = gpu_stats.cpu_ms > 0 ? gpu_stats.cpu_ms : -1;
     }
-    dm_3d_scale_feed(iv, gpu_sample_ms);
+    dm_3d_scale_feed_load(iv, gpu_sample_ms, cpu_sample_ms);
 #else
     dm_3d_scale_feed(iv, -1);
 #endif

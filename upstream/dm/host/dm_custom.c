@@ -2,13 +2,13 @@
 // 存储：存档提交目录旁的 sw_custom.txt（iOS 上在 Documents 里，升级包不丢），一行一个「键=0/1」；没有这个文件 / 没写的键 = 各键缺省（省电模式关，其余开）；不认识的行（旧版的 drop_filter、ver）读时跳过。
 // 掉落筛选照红叶 mod 一件都不藏，整块拆掉，drop_filter 键与它的 ver=2 迁移一起删了
 // 不写进游戏自己的设置存档：不依赖它的格式与写盘时机，应用 / 放弃 / 默认由我们自己按原版选项页的语义做。
-// 界面：选项面板「自定义」页（借原版视频页 VideoOptionsPanel），每行一个原版勾选框，控件名 TouchCustom_<键>（布局 touch_layout.py 的 _custom_page）。勾选只记成待定值，
+// 界面：选项面板「自定义」页；iOS 借原版视频页 VideoOptionsPanel，Android 保留该页给 Display 并改借 Controls 的 KeyBindingMenu。每行一个原版勾选框，控件名 TouchCustom_<键>（布局 touch_layout.py 的 _custom_page）。勾选只记成待定值，
 // 「应用」（OptionsPanelMessage:AcceptChanges）才生效并存盘，「放弃」（CancelChanges）丢掉待定值，「默认」（ResetToDefaults）待定值回各键缺省（省电模式关、其余开；还要点应用）
 // 「自定义」(Custom) settings: on/off switches for the features we added ourselves. For the interface see dm_custom.h.
 // Storage: sw_custom.txt next to the save commit directory (on iOS it is in Documents and survives app upgrades), one 'key=0/1' per line; without this file / for keys not written = each key's default (power-saving mode off, the rest on); unrecognized lines (drop_filter and ver from old versions) are skipped when reading.
 // Drop filtering follows the Hongye community mod and hides nothing, so the whole block was removed, and the drop_filter key was deleted together with its ver=2 migration
 // Not written into the game's own settings save: no dependence on its format or on when it writes to disk; apply / discard / default are done by ourselves following the semantics of the original game's options page.
-// UI: the 「自定义」(Custom) page of the options panel (borrowing the original game's video page VideoOptionsPanel), one original-game checkbox per row, widget name TouchCustom_<key> (_custom_page in the layout touch_layout.py). Checking only records a pending value;
+// UI: the 「自定义」(Custom) page of the options panel: iOS borrows VideoOptionsPanel; Android preserves it for Display and borrows Controls / KeyBindingMenu. Each row uses an original-game checkbox named TouchCustom_<key> (_custom_page in touch_layout.py). Checking only records a pending value;
 // only 「应用」(Apply) (OptionsPanelMessage:AcceptChanges) makes it take effect and saves to disk, 「放弃」(Discard) (CancelChanges) throws away the pending values, and 「默认」(Default) (ResetToDefaults) sets the pending values back to each key's default (power-saving mode off, the rest on; Apply still has to be tapped)
 #include "dm_custom.h"
 #include "dm_widget.h"
@@ -121,10 +121,19 @@ static void hide_widget_x(uint64_t w) {
     r[0] = 99999; ((void (*)(uint64_t))*(uint64_t *)(*(uint64_t *)w + 0x10))(w);
 }
 #endif
+static uint64_t custom_panel(uint64_t root) {
+    uint64_t panel = find_w(root, "VideoOptionsPanel", 1);
+    if (panel && find_w(panel, "TouchCustomRows", 0)) return panel;
+#ifdef __ANDROID__
+    panel = find_w(root, "KeyBindingMenu", 1);
+    if (panel && find_w(panel, "TouchCustomRows", 0)) return panel;
+#endif
+    return 0;
+}
 void dm_custom_ui_pump(unsigned long long root) {
     if (!root || !main_base()) return;
     static uint64_t seen[NK];
-    uint64_t sp = find_w(root, "VideoOptionsPanel", 1); if (!sp || !*(uint8_t *)(sp + 0x50)) {   // 「自定义」页 = 借来的视频页（界面根的直接子，与设置页并列）。页不在屏上：没点「应用」的勾选作废（同原版不应用就离开），下次出现重摆 | The 「自定义」(Custom) page = the borrowed video page (a direct child of the UI root, alongside the settings page). Page not on screen: checkbox changes without tapping 「应用」(Apply) are discarded (same as leaving without applying in the original game), and it is laid out again the next time it appears
+    uint64_t sp = custom_panel(root); if (!sp || !*(uint8_t *)(sp + 0x50)) {   // Custom page is the borrowed VideoOptionsPanel on iOS and KeyBindingMenu on Android; leaving it discards unapplied checkbox state, like the native options panels
         int was = 0; for (int i = 0; i < NK; i++) was |= seen[i] != 0;
         if (was) for (int i = 0; i < NK; i++) atomic_store(&g_pend[i], -1);
         memset(seen, 0, sizeof seen); return; }

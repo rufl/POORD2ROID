@@ -1035,19 +1035,56 @@ def _scale_profile_font_sizes(text):
         raise SystemExit('touch_layout：profile 没有可缩放的字号')
     return scaled
 
-def build_profile(romfs, outdir):
+def _android_profile_overrides(text, overrides):
+    for key, val in overrides.items():
+        pat = re.compile(r'("%s"\s*:\s*)\d+' % re.escape(key))
+        if pat.search(text):
+            text = pat.sub(lambda m: m.group(1) + str(val), text, count=1)
+        else:
+            text = re.sub(r'("basedOn"\s*:\s*"[^"]*"\s*,)', r'\1\n    "%s": %s,' % (key, val), text, count=1)
+    return text
+
+def _apply_android_profile_fonts(text, handheld=False):
+    scaled = _scale_profile_font_sizes(text)
+    if not handheld:
+        return _android_profile_overrides(scaled, {
+            'TooltipFontSize': 54,
+            'LargeFontSize': 64,
+            'XLargeFontSize': 68,
+            'ExtraLargeFontSize': 72,
+        })
+    return _android_profile_overrides(scaled, {
+        'SmallFontSize': 54,
+        'MediumFontSize': 60,
+        'XMediumFontSize': 66,
+        'MediumLargeFontSize': 70,
+        'XMediumLargeFontSize': 70,
+        'LargeFontSize': 72,
+        'XLargeFontSize': 76,
+        'ExtraLargeFontSize': 80,
+        'TooltipFontSize': 58,
+        'StyleNPCDialogueSize': 64,
+        'FriendsListMediumFontSize': 62,
+        'FriendsListSmallFontSize': 54,
+        'pointSize': 66,
+    })
+
+def build_profile(romfs, outdir, target=None):
+    android = (target or '').lower() == 'android'
     path, text = read_layout(romfs, 'controller/_profileconsolehd.json')
     text = text.replace('\r\n', '\n')   # 这份原版是 CRLF | This original-game file uses CRLF
     anchor = '"XMediumFontSize": 30,\n    "MediumFontSize": 28,\n    "SmallFontSize": 26,\n'
     if text.count(anchor) != 1: raise SystemExit('touch_layout：_profileConsoleHD 的字号段不是原样（原版变了？）')
-    o = os.path.join(outdir, 'profile_consolehd.json'); open(o, 'w', encoding='utf-8').write(_scale_profile_font_sizes(text)); repl = {path.lower(): o}
+    console_out = _apply_android_profile_fonts(text, handheld=False) if android else _scale_profile_font_sizes(text)
+    o = os.path.join(outdir, 'profile_consolehd.json'); open(o, 'w', encoding='utf-8').write(console_out); repl = {path.lower(): o}
     path, text = read_layout(romfs, 'controller/_profilehandheldhd.json'); text = text.replace('\r\n', '\n')
     anchor = '"XMediumLargeFontSize": 36,\n    "MediumLargeFontSize": 36,\n    "XMediumFontSize": 34,\n'
     if text.count(anchor) != 1: raise SystemExit('touch_layout：_profileHandheldHD 的字号段不是原样（原版变了？）')
     if text.count('"basedOn": "ConsoleLV"') != 1:
         raise SystemExit('touch_layout：_profileHandheldHD 不再继承 ConsoleLV，检查布局基线')
     text = text.replace('"basedOn": "ConsoleLV"', '"basedOn": "ConsoleHD"', 1)
-    o = os.path.join(outdir, 'profile_handheldhd.json'); open(o, 'w', encoding='utf-8').write(_scale_profile_font_sizes(text)); repl[path.lower()] = o
+    handheld_out = _apply_android_profile_fonts(text, handheld=True) if android else _scale_profile_font_sizes(text)
+    o = os.path.join(outdir, 'profile_handheldhd.json'); open(o, 'w', encoding='utf-8').write(handheld_out); repl[path.lower()] = o
     return repl
 
 
@@ -1116,35 +1153,31 @@ def _bind_modal_5col(s):
     if n != 2: raise SystemExit('touch_layout：绑定框第 6 列应为 2 格，找到 %d 格（原版布局变了？）' % n)
     return s, n
 PRESENT['controller/buttonbindingmodalhd.json'] = _bind_modal_5col
-def build_present(romfs, outdir):
+def build_present(romfs, outdir, target=None):
     """局内呈现改动。返回 ({包内逻辑路径(小写): 本地文件}, 改了几处)；某文件一处没改到即报错。 | In-game presentation changes. Returns ({logical path in package (lowercase): local file}, number of places changed); it is an error if any file has no place changed."""
     repl = {}; total = 0
-    for rel, fn in PRESENT.items():
+    for rel, fn in present_transforms(target).items():
         path, text = read_layout(romfs, rel); new, n = fn(text)
         if n == 0: raise SystemExit('touch_layout：%s 一处也没改到（原版布局变了？）' % rel)
         o = os.path.join(outdir, 'present_' + rel.replace('/', '_')); open(o, 'w', encoding='utf-8').write(new); repl[path.lower()] = o; total += n
     return repl, total
 
-# ---------- 选项页：视频页签整页去掉（iPhone 自己能调亮度），其余页签里与触摸产品无关的项藏掉 ----------
-# ---------- Options pages: the whole video tab page is removed (the iPhone can adjust brightness itself), and items in the other tabs unrelated to the touch product are hidden ----------
+# ---------- 选项页：保留原版全部页签（含「视频」/ Display 供画质与分辨率调节） ----------
+# ---------- Options pages: retain all original tabs (including "Video" / Display for graphics and resolution) ----------
 def _settings_tabs(text):
-    """页签条去掉第一个（视频）：个数与四个并列数组各去首项；第四项「控制」换成「自定义」。 | Remove the first item (video) from the tab strip: drop the first entry from the count and from each of the four parallel arrays; the fourth item 「控制」(Controls) is replaced with 「自定义」(Custom)."""
-    n = 0
-    def drop_first(m):
-        nonlocal n; items = [x for x in re.split(r',\s*', m.group(2).strip().rstrip(',')) if x.strip()]; n += 1
-        return m.group(1) + ' ' + ', '.join(items[1:]) + ' ' + m.group(3)
-    new = re.sub(r'("(?:inactiveFrames|activeFrames|textStrings)"\s*:\s*\[)([^\]]*)(\])', drop_first, text)
-    new = re.sub(r'("tabMessages"\s*:\s*\[)([^\]]*)(\])', lambda m: m.group(1) + '\n' + ',\n'.join(x for x in [y.strip() for y in m.group(2).split(',')] if x and 'VideoOptionsPanel' not in x) + ',\n' + m.group(3), new)
-    new, k = re.subn(r'"tabCount"\s*:\s*5', '"tabCount": 4', new)
-    # 第四项原是「控制」（KeyBindingMenu，本平台不出现）：改成「自定义」，打开借来的视频页（见 _custom_page）
-    # The fourth item was originally 「控制」(Controls) (KeyBindingMenu, which does not appear on this platform): changed to 「自定义」(Custom), opening the borrowed video page (see _custom_page)
-    if new.count('"@Controls"') != 1 or new.count('SettingsPanelMessage:CheckChanges:KeyBindingMenu') != 1: raise SystemExit('touch_layout：页签条第四项不是原样「控制」，自定义页签没换')
-    # 第三项「游戏设定」：原版英文串 Game Settings 在 266 宽的页签里折成两行、第二行被截成「Se…」（英文版审计）；触屏页签条换成我们表里的串（中文不变、英文 Settings）。手柄版页签条是原版，不动
-    # Third item 「游戏设定」(Settings): the original English string Game Settings wraps to two lines in the 266-wide tab and the second line is truncated to "Se..." (English version audit); the touch tab bar uses the string from our table instead (Chinese unchanged, English Settings). The controller layout tab bar is the original and is left alone
-    if new.count('"@GameSettingsTab"') != 1: raise SystemExit('touch_layout：页签条第三项不是原样「游戏设定」（原版布局变了？）')
-    new = new.replace('"@GameSettingsTab"', '"@dmTabGameSettings"')
-    new = new.replace('"@Controls"', '"@KeyBindingTypeCustom"').replace('SettingsPanelMessage:CheckChanges:KeyBindingMenu', 'SettingsPanelMessage:CheckChanges:VideoOptionsPanel')
-    return new, n + k + 1
+    """页签条保留全部 5 项（含第一项「视频」/ Display 供画质与分辨率调节）；「游戏设定」换成表里的串（避免英文截断）。 | Keep all 5 items in the tab strip (including Video / Display for graphics and resolution adjustments); replace @GameSettingsTab with @dmTabGameSettings to prevent English text truncation."""
+    if text.count('"@GameSettingsTab"') != 1: raise SystemExit('touch_layout：页签条第三项不是原样「游戏设定」（原版布局变了？）')
+    new = text.replace('"@GameSettingsTab"', '"@dmTabGameSettings"')
+    return new, 1
+
+def _settings_tabs_android(text):
+    """Android retains Display on VideoOptionsPanel and uses the spare Controls route for Custom."""
+    if text.count('"@OptionsMenuVideo"') != 1 or text.count('"SettingsPanelMessage:CheckChanges:VideoOptionsPanel"') != 1:
+        raise SystemExit('touch_layout：Android Display 页签不是原样（原版布局变了？）')
+    if text.count('"@Controls"') != 1 or text.count('"SettingsPanelMessage:CheckChanges:KeyBindingMenu"') != 1:
+        raise SystemExit('touch_layout：Android Controls 页签不是原样（原版布局变了？）')
+    text, n = _settings_tabs(text)
+    return text.replace('"@Controls"', '"@KeyBindingTypeCustom"'), n + 1
 def _drop_rows(*rows):
     """把选项表里的整行（TableRowWidget "Row <名>"）删掉：表格按剩下的行重排，不留空行。每个名字必须恰好删到一行。 | Delete whole rows (TableRowWidget "Row <name>") from the options table: the table re-lays out the remaining rows and leaves no empty row. Each name must delete exactly one row."""
     def fn(text):
@@ -1232,8 +1265,11 @@ def _custom_lang_row():
     return (text('TouchCustom_lang_en_Text', 0, 700, 'dmCustomLang')
             + text('TouchCustomLangZh_Text', _LANG_ZH_X[0], _LANG_ZH_X[1] - _LANG_ZH_X[0] - 10, 'dmCustomLangZh') + box('TouchCustom_lang_zh', _LANG_ZH_X[1])
             + text('TouchCustomLangEn_Text', _LANG_EN_X[0], _LANG_EN_X[1] - _LANG_EN_X[0] - 10, 'dmCustomLangEnOpt') + box('TouchCustom_lang_en', _LANG_EN_X[1]))
-def _custom_page(text):
-    if '"name": "VideoOptionsPanel"' not in text or '"name": "OptionsTable"' not in text: raise SystemExit('touch_layout：主机版视频页不是原样（原版布局变了？），自定义页没换')
+def _custom_page(text, panel_name='VideoOptionsPanel'):
+    if panel_name == 'VideoOptionsPanel' and ('"name": "VideoOptionsPanel"' not in text or '"name": "OptionsTable"' not in text):
+        raise SystemExit('touch_layout：主机版视频页不是原样（原版布局变了？），自定义页没换')
+    if panel_name == 'KeyBindingMenu' and '"name": "KeyBindingMenu"' not in text:
+        raise SystemExit('touch_layout：原版键位页不是原样（原版布局变了？），自定义页没换')
     title = ('{ "type": "TableRowWidget", "name": "Row TouchCustomTitle", "children": [\n'
              '    { "type": "TextBoxWidget", "name": "TouchCustomTitle", "fields": { "text": "@KeyBindingTypeCustom", "style": "$StyleSettingsTitle" }, "children": [\n'
              '        { "type": "ImageWidget", "name": "Divider", "fields": { "rect": "$OptionsDividerRect", "filename": "PauseMenu\\\\Divider" } },\n'
@@ -1254,14 +1290,21 @@ def _custom_page(text):
            '"filename": "Controller/PANEL/ControllerSelector/ControllerSelectorBorder", "tileScale": 0.5 } },\n'
            '            ] },\n        ] },\n'
            '    ]\n}\n')
+    if panel_name != 'VideoOptionsPanel':
+        out = out.replace('"name": "VideoOptionsPanel"', '"name": "%s"' % panel_name, 1)
     return out, len(_CUSTOM_ALL) + 2
-PRESENT['controller/console/videooptionspanelhd.json'] = _custom_page
-# 手柄版选项页：原版页签条不动，只把第一项「视频」换成「自定义」——它打开的视频页就是上面那份自定义页（两种模式同一份内容）
-# Controller options page: the original tab bar is untouched, only the first item "Video" is replaced by "Custom"; the video page it opens is the Custom
-# page above (same content in both modes)
-def pad_settings(s): return _sub1(s, '"@OptionsMenuVideo"', '"@KeyBindingTypeCustom"')   # 原版串：自定义 / Custom（跟游戏语言走） | original string: "Custom" in Chinese / English (follows the game language)
+# 手柄版选项页：保留原版全部 5 项页签（含第一项「视频」/ Display）
+# Controller options page: retain all original 5 tabs (including "Video" / Display)
+def pad_settings(s): return s
 def pad_custom_page(s): return _custom_page(s)[0]
-# 挂进 PRESENT：build_ingame 对同一份文件（往选项页插「应用 / 默认 / 放弃」）会先套这里的变换再插按钮，不会出两份覆盖互相盖掉
+def _custom_keybinding_page(text): return _custom_page(text, 'KeyBindingMenu')
+
+def present_transforms(target=None):
+    if (target or '').lower() != 'android': return PRESENT
+    transforms = dict(PRESENT)
+    transforms['controller/console/settingspanelhd.json'] = _settings_tabs_android
+    transforms['keybindingmenuhd.json'] = _custom_keybinding_page
+    return transforms
 # Hooked into PRESENT: for the same file (inserting 「应用 / 默认 / 放弃」(Apply / Default / Discard) into the options page) build_ingame applies the transform here first and then inserts the buttons, so two overlays that overwrite each other are not produced
 PRESENT['controller/console/settingspanelhd.json'] = _settings_tabs
 # 选项页底部的手柄提示条（「默认」「返回」两段说明字；键图标已透明）：局内被外框底带挡着看不出，前端选项页没有外框、字露在三个按钮下面——挪走
@@ -1349,12 +1392,13 @@ def _widget_block(s, name):
 # button_blank). The controller layout does not carry over "Repair All" (hold the left stick on the original controller scheme) or the gamble
 # page refresh (the original controller scheme has its own key)
 PAD_VENDOR = {'controller/vendorpanellayouthd.json': ('vendorpanellayouthd.json', [INGAME['controller/vendorpanellayouthd.json'][1][0], INGAME['controller/vendorpanellayouthd.json'][1][1]])}
-def build_ingame(romfs, outdir, spec=None, present=True):   # present=False：不套触屏的摆放变换（给手柄版布局插按钮用） | present=False: do not apply the touch placement transform (used for inserting buttons into the controller layout)
+def build_ingame(romfs, outdir, spec=None, present=True, target=None):   # present=False：不套触屏的摆放变换（给手柄版布局插按钮用） | present=False: do not apply the touch placement transform (used for inserting buttons into the controller layout)
     """局内面板插回原生按钮。返回 ({包内逻辑路径(小写): 本地文件}, 插了几个)。 | Insert native buttons back into the in-game panels. Returns ({logical path in package (lowercase): local file}, number inserted)."""
     repl = {}; total = 0
+    transforms = present_transforms(target) if present else {}
     for rel, (src, items) in (INGAME if spec is None else spec).items():
         path, text = read_layout(romfs, rel); _, base = read_layout(romfs, src); add = ''
-        if present and rel in PRESENT: text = PRESENT[rel](text)[0]   # 同一份布局在 PRESENT 里也改了摆放：先套那里的变换 | The same layout also has its placement changed in PRESENT: apply that transform first
+        if rel in transforms: text = transforms[rel](text)[0]   # 同一份布局在 PRESENT 里也改了摆放：先套那里的变换 | The same layout also has its placement changed in PRESENT: apply that transform first
         for name, new_name, override, *alt in items:
             b = _widget_block(read_layout(romfs, alt[0])[1] if alt else base, name)   # 第 4 项 = 这个控件另取自哪份键鼠版布局（资料片版继承经典版，按钮写在经典版那份里） | Item 4 = which other keyboard-and-mouse layout this widget is taken from (the expansion version inherits the classic version, and the button is written in the classic one)
             if re.search(r'"name"\s*:\s*"%s"' % re.escape(new_name or name), text): raise SystemExit('touch_layout：%s 里已有同名控件 %s' % (rel, new_name or name))

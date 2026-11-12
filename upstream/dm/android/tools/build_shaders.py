@@ -141,6 +141,17 @@ def record_build_config(work, output, jobs, precision, tool=None):
         config["translator_sha256"] = previous["translator_sha256"]
     path.write_text(json.dumps(config, indent=2) + "\n")
 
+def shader_output_digest(output):
+    h = hashlib.sha256()
+    files = sorted(list(output.glob("*.spv")) + list(output.glob("*.meta")))
+    for path in files:
+        h.update(path.name.encode("utf-8"))
+        h.update(b"\0")
+        h.update(path.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest(), len(list(output.glob("*.meta")))
+
+
 
 def storage_image_capabilities(raw):
     """仅为实际 Unknown-format storage image 访问补声明；不修改任何执行指令或 ID。
@@ -275,7 +286,16 @@ def main():
             parser.error("--postprocess-only accepts just output, backup and validation options")
         paths = sorted(output.glob("*.spv"))
         if not paths: parser.error(f"No SPIR-V modules in {output}")
-        postprocess_spirv(paths, backup, validator, args.jobs); return
+        postprocess_spirv(paths, backup, validator, args.jobs)
+        profile_path = output / "host-profile.json"
+        if profile_path.is_file():
+            profile = json.loads(profile_path.read_text())
+            digest, meta_count = shader_output_digest(output)
+            profile["spirv_meta_sha256"] = digest
+            profile["shader_count"] = meta_count
+            profile["spirv_validated"] = bool(validator)
+            profile_path.write_text(json.dumps(profile, indent=2) + "\n")
+        return
     if args.reuse_jobs is None and (args.romfs is None or args.main is None): parser.error("romfs and main are required unless --reuse-jobs is provided")
     reduced = args.precision == "reduced"
     if args.reuse_jobs is not None:
@@ -341,7 +361,9 @@ def main():
     if any(results) or good != len(jobs): sys.exit(1)
     # 将 host profile 随缓存一起保存，设备安装/对照时可明确区分32与64版本。
     # Save the host profile beside the cache so device installation/comparisons can distinguish 32/64 variants.
-    profile = json.loads((work / "build-config.json").read_text()); profile.update(schema=1, shader_count=good, spirv_target="vulkan1.1", spirv_validated=bool(validator))
+    profile = json.loads((work / "build-config.json").read_text())
+    digest, _ = shader_output_digest(output)
+    profile.update(schema=2, shader_count=good, spirv_target="vulkan1.1", spirv_validated=bool(validator), spirv_meta_sha256=digest)
     (output / "host-profile.json").write_text(json.dumps(profile, indent=2) + "\n")
     (output / "host-subgroup-size.txt").write_text(str(args.host_subgroup_size) + "\n")
 

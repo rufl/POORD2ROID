@@ -130,6 +130,23 @@ static VkResult pipeline_create_graphics(const VkGraphicsPipelineCreateInfo *inf
 static VkResult pipeline_create_compute(const VkComputePipelineCreateInfo *info,VkPipeline *pipeline) {
     pthread_mutex_lock(&pipeline_cache_mutex);VkResult result=vkCreateComputePipelines(device,pipeline_cache,1,info,NULL,pipeline);pipeline_cache_changed_locked(result);pthread_mutex_unlock(&pipeline_cache_mutex);return result;
 }
+static void pipeline_disk_hash_file(dm_android_sha256_context *digest,const char *directory,const char *name,size_t max_bytes) {
+    if(!directory||!*directory)return;
+    char path[1200];int n=snprintf(path,sizeof path,"%s/%s",directory,name);
+    if(n<=0||(size_t)n>=sizeof path)return;
+    int fd=open(path,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+    if(fd<0)return;
+    struct stat st;
+    if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_size<=0||(size_t)st.st_size>max_bytes){close(fd);return;}
+    uint8_t *buf=malloc((size_t)st.st_size);
+    if(buf&&pipeline_disk_transfer(fd,buf,(size_t)st.st_size,0)){
+        uint8_t tag[8];pipeline_disk_put64(tag,(uint64_t)st.st_size);
+        dm_android_sha256_update(digest,name,(uint32_t)strlen(name));
+        dm_android_sha256_update(digest,tag,sizeof tag);
+        dm_android_sha256_update(digest,buf,(uint32_t)st.st_size);
+    }
+    free(buf);close(fd);
+}
 static void pipeline_cache_initialize(const VkPhysicalDeviceProperties *properties) {
     pipeline_disk_properties=*properties;
     const char *directory=getenv("DM_VK_PIPELINE_CACHE_DIR");
@@ -138,17 +155,30 @@ static void pipeline_cache_initialize(const VkPhysicalDeviceProperties *properti
         if(pipeline_disk_dir>=0){pipeline_disk_lock=openat(pipeline_disk_dir,"writer.lock",O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW,0600);
             if(pipeline_disk_lock<0||flock(pipeline_disk_lock,LOCK_EX|LOCK_NB)){if(pipeline_disk_lock>=0)close(pipeline_disk_lock);pipeline_disk_lock=-1;close(pipeline_disk_dir);pipeline_disk_dir=-1;LOG("[vulkan-pipeline-cache] disk_disabled=writer_lock");}}
     }
-    // namespace包含真实设备/驱动与应用ABI；blob内部头另外核实，文件名不是验证依据。
-    // Namespace includes actual device/driver and application ABI; validate the blob header independently of its filename.
-    uint8_t identity[48]={0};pipeline_disk_put32(identity,properties->vendorID);pipeline_disk_put32(identity+4,properties->deviceID);pipeline_disk_put32(identity+8,properties->driverVersion);pipeline_disk_put32(identity+12,properties->apiVersion);memcpy(identity+16,properties->pipelineCacheUUID,16);pipeline_disk_put32(identity+32,gpu_subgroup_size);
+    // namespace包含真实设备/驱动、着色器配置摘要及影响SPIR-V/布局改写的运行时策略。
+    // Namespace includes device/driver, actual shader profile digests, and runtime shader-lowering policies.
+    uint8_t identity[60]={0};pipeline_disk_put32(identity,properties->vendorID);pipeline_disk_put32(identity+4,properties->deviceID);pipeline_disk_put32(identity+8,properties->driverVersion);pipeline_disk_put32(identity+12,properties->apiVersion);memcpy(identity+16,properties->pipelineCacheUUID,16);pipeline_disk_put32(identity+32,gpu_subgroup_size);
 #ifdef __ANDROID__
     pipeline_disk_put32(identity+36,vk_api.actual_driver_id);pipeline_disk_put32(identity+40,vk_api.using_custom);pipeline_disk_put32(identity+44,vk_api.requested_subgroup_size);
 #endif
-    dm_android_sha256_context digest;dm_android_sha256_init(&digest);const char schema[]="d2r-android-pipeline-cache-v1";dm_android_sha256_update(&digest,schema,sizeof schema);dm_android_sha256_update(&digest,identity,sizeof identity);
+    const char *lzf_env=getenv("DM_VK_LOCAL_Z_FOLD");
+    int lzf_on=gpu_is_mali_properties(properties)&&(lzf_env&&*lzf_env?strcmp(lzf_env,"0")!=0:perf_config_int("local_z_fold",1)!=0);
+    const char *su_env=getenv("DM_VK_STATIC_UNIFORMS");
+    int su_on=su_env&&*su_env?strcmp(su_env,"0")!=0:perf_config_int("static_uniforms",0)!=0;
+    pipeline_disk_put32(identity+48,(uint32_t)(lzf_on?1:0));
+    pipeline_disk_put32(identity+52,lzf_on?4u:0u);
+    pipeline_disk_put32(identity+56,(uint32_t)(su_on?1:0));
+    dm_android_sha256_context digest;dm_android_sha256_init(&digest);const char schema[]="d2r-android-pipeline-cache-v2";dm_android_sha256_update(&digest,schema,sizeof schema);dm_android_sha256_update(&digest,identity,sizeof identity);
 #ifdef __ANDROID__
     dm_android_sha256_update(&digest,vk_api.driver_name,(uint32_t)strlen(vk_api.driver_name));dm_android_sha256_update(&digest,vk_api.driver_directory,(uint32_t)strlen(vk_api.driver_directory));
 #endif
-    const char *profile=getenv("DM_VK_SHADERS");if(profile)dm_android_sha256_update(&digest,profile,(uint32_t)strlen(profile));dm_android_sha256_final(pipeline_disk_identity,&digest);
+    const char *profile=getenv("DM_VK_SHADERS");
+    if(profile){
+        dm_android_sha256_update(&digest,profile,(uint32_t)strlen(profile));
+        pipeline_disk_hash_file(&digest,profile,"host-profile.json",65536);
+        pipeline_disk_hash_file(&digest,profile,"host-subgroup-size.txt",1024);
+    }
+    dm_android_sha256_final(pipeline_disk_identity,&digest);
     for(unsigned i=0;i<32;i++)snprintf(pipeline_disk_name+2*i,3,"%02x",pipeline_disk_identity[i]);strcpy(pipeline_disk_name+64,".bin");
     size_t size=0;void *data=pipeline_disk_load(&size);VkPipelineCacheCreateInfo info={.sType=VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,.initialDataSize=size,.pInitialData=data};
     VkResult result=vkCreatePipelineCache(device,&info,NULL,&pipeline_cache);free(data);

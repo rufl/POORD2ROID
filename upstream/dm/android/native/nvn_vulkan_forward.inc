@@ -40,7 +40,8 @@ static int forward_host_effects(const async_batch *batch,uintptr_t address,uint6
     if(!batch)return 0;
     // 保留动态 *copy_tail 的首个未来输出边界；只捕获 marker 时的 order 会漏掉期间的 event。
     // Preserve the dynamic first-future-output boundary at *copy_tail; capturing an order at marker creation would miss intervening events.
-    int result=pending_range_overlap(batch,DM_PENDING_HOST_EFFECT,address,size,stop_exclusive?stop_exclusive->order:DM_PENDING_ORDER_ALL);
+    int may_overlap=async_pending_may_overlap(batch,address,size);
+    int result=may_overlap?pending_range_overlap(batch,DM_PENDING_HOST_EFFECT,address,size,stop_exclusive?stop_exclusive->order:DM_PENDING_ORDER_ALL):0;
 #ifdef DM_VK_REFERENCE_GATES
     post_op *posts=batch==async_current?post_first:batch->posts;int reference=0;
     for(post_op *p=posts;p&&p!=stop_exclusive;p=p->next){
@@ -59,10 +60,17 @@ static forward_result forward_find(uintptr_t address,uint64_t size,uint64_t alig
     const post_op *stop_exclusive=scope_marker?*scope_marker:NULL;post_op *latest=NULL;
     for(async_batch *batch=async_first;batch;batch=batch->next){
         if(batch->host_sync&&forward_host_effects(batch,address,size,NULL))return FORWARD_HOST_EFFECT;
-        latest=forward_latest_chain(batch->copies,address,size,NULL,latest);
+        if(async_any_copy_may_overlap(batch,address,size))latest=forward_latest_chain(batch->copies,address,size,NULL,latest);
+#ifdef DM_VK_REFERENCE_GATES
+        else if(forward_latest_chain(batch->copies,address,size,NULL,NULL))die("Vulkan forward bloom filter missed batch copy");
+#endif
     }
     if(pending_host_sync&&forward_host_effects(async_current,address,size,stop_exclusive))return FORWARD_HOST_EFFECT;
-    latest=forward_latest_chain(post_copy_first,address,size,stop_exclusive,latest);if(!latest)return FORWARD_NONE;
+    if(async_any_copy_may_overlap(async_current,address,size))latest=forward_latest_chain(post_copy_first,address,size,stop_exclusive,latest);
+#ifdef DM_VK_REFERENCE_GATES
+    else if(forward_latest_chain(post_copy_first,address,size,stop_exclusive,NULL))die("Vulkan forward bloom filter missed current copy");
+#endif
+    if(!latest)return FORWARD_NONE;
     uintptr_t start=(uintptr_t)latest->destination;
     // 最新一次写只覆盖部分请求时不得退回更老的完整版本，否则会丢失这次部分覆盖。
     // Never fall back to an older full version when the latest write covers only part of the requested range.

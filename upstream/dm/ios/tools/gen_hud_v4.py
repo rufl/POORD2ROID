@@ -93,7 +93,9 @@ for n,c in (('HealthBall',g['LBC']),('ManaBall',g['RBC'])):
     if not ANDROID:
         vd['rect']={'x':-6000,'y':0}   # iOS drawV4 renders replacement glyphs.
         continue
-    vd['rect']={'x':T.get('tx',-174),'y':round((Y(g['YB']-T.get('txt',30))-(Y(c[1])-175*sb))/sb,1),'width':348,'scale':ts}
+    vd_w=520
+    vd_x=round(T.get('tx',-174)-(vd_w-348)*ts/2,1)
+    vd['rect']={'x':vd_x,'y':round((Y(g['YB']-T.get('txt',30))-(Y(c[1])-175*sb))/sb,1)-8,'width':vd_w,'scale':ts}
     vd.setdefault('style',{})['alignment']={'h':'center'}
 s6=g['slots'][5]; sl=q(T.get('lvl',0.9)); lc=((s6[0]+s6[2])/2,(s6[1]+s6[3])/2)
 lx,ly=X(lc[0])-62*sl+T.get('lx',0),Y(lc[1])-60*sl; rect('LevelUpButton',x=lx,y=ly,scale=sl)

@@ -111,6 +111,17 @@ static void test_scale3d_gpu(void) {
     s3 = (scale3d_ctl){.max_level = 5}; s3_now = 4000 * S3_SEC;
     s3_n(2000, 25.0);
     CHECK(s3.level == 5, "automatic scale reaches its 0.50 floor when frame rate stays low");
+    dm_3d_scale_set_auto_bounds(60, 85);
+    CHECK(scale3d_clamp_auto(1.0f) == 0.85f && scale3d_clamp_auto(0.70f) == 0.70f && scale3d_clamp_auto(0.50f) == 0.60f,
+          "auto bounds clamp dynamic scale between configured min and max");
+    dm_3d_scale_set_auto_bounds(50, 100);
+    int ld_lvl = -1; double ld_fps = 0, ld_gpu = 0;
+    CHECK(scale3d_cpu_aware_gate(0, 1, 45.0, 8.0, 22.0, 16.6667, &ld_lvl, &ld_fps, &ld_gpu) == 0,
+          "CPU-bound frame blocks downscale when GPU has headroom");
+    CHECK(scale3d_cpu_aware_gate(0, 1, 45.0, 15.5, 10.0, 16.6667, &ld_lvl, &ld_fps, &ld_gpu) == 1,
+          "GPU-bound frame allows initial downscale");
+    CHECK(scale3d_cpu_aware_gate(1, 2, 45.1, 15.4, 10.0, 16.6667, &ld_lvl, &ld_fps, &ld_gpu) == 1,
+          "repeated downscale with zero FPS/GPU gain is suppressed to avoid endless blur");
 }
 static void test_scale3d(void) {
     s3 = (scale3d_ctl){.max_level = 2}; s3_now = 1000 * S3_SEC;

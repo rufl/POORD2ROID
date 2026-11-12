@@ -72,16 +72,29 @@ void dm_android_current_thread_read_stats(dm_android_read_stats *out) {
     *out = current_thread_read_stats; out->tid = (uint32_t)gettid();
     errno = saved_errno;
 }
+static int dm_android_read_timing_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *env = getenv("DM_VK_DIAG");
+        enabled = env && *env && strcmp(env, "0");
+    }
+    return enabled;
+}
 int dm_android_read_memory(uintptr_t address, void *destination, size_t size) {
     struct iovec local = {destination, size}, remote = {(void *)address, size};
-    // 两次真实 wall 读取；保留进入 syscall 前与 syscall 返回后的 errno，不更改安全读取结果。
-    // Take two actual wall readings; preserve errno before/after the syscall without changing the safe-read result.
-    struct timespec before, after; int incoming_errno = errno;
-    int before_ok = !clock_gettime(CLOCK_MONOTONIC, &before);
-    errno = incoming_errno;
+    // 仅在显式诊断开启时采墙钟，避免高频安全读取额外两次时钟；关闭时如实记为 unavailable。
+    // Sample wall clocks only when explicit diagnostics are enabled; when disabled mark unavailable rather than faking zero.
+    int measure = dm_android_read_timing_enabled();
+    struct timespec before, after;
+    int before_ok = 0, after_ok = 0;
+    if (measure) {
+        int incoming_errno = errno;
+        before_ok = !clock_gettime(CLOCK_MONOTONIC, &before);
+        errno = incoming_errno;
+    }
     ssize_t n = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
     int read_errno = errno;
-    int after_ok = !clock_gettime(CLOCK_MONOTONIC, &after);
+    if (measure) after_ok = !clock_gettime(CLOCK_MONOTONIC, &after);
     dm_android_read_stats *stats = &current_thread_read_stats;
     stats->calls++; stats->requested_bytes += size;
     if (n >= 0) {
@@ -92,7 +105,7 @@ int dm_android_read_memory(uintptr_t address, void *destination, size_t size) {
     stats->size_buckets[bucket]++;
     stats->bucket_requested_bytes[bucket] += size;
     if (n >= 0) stats->bucket_returned_bytes[bucket] += (uint64_t)n;
-    if (before_ok && after_ok) {
+    if (measure && before_ok && after_ok) {
         uint64_t start = (uint64_t)before.tv_sec * 1000000000ull + before.tv_nsec;
         uint64_t finish = (uint64_t)after.tv_sec * 1000000000ull + after.tv_nsec;
         if (finish >= start) {

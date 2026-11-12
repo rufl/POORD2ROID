@@ -112,6 +112,11 @@ static void draw_graphics_inner(const p_draw *draw,const p_draw_idx *indexed) {
     if(!graphics_active_frame)async_chunk_boundary_locked();
     if(!fs)fs=graphics_empty_shader();
     post_op *const *output_scope=post_copy_tail;forward_scope_marker=output_scope;
+    // 绑定着色器描述符之前先标记当前渲染附件与 storage image，防止在同一绘制内被采样转换到只读布局。
+    // Pre-mark active render targets and storage images before shader descriptor binding so same-draw bindings retain GENERAL.
+    for(int i=0;i<state.rt.n;i++)if(state.rt.color[i])image_get(state.rt.color[i])->attachment_seen=1;
+    if(state.rt.depth)image_get(state.rt.depth)->attachment_seen=1;
+    shader_mark_storage_images(vs);shader_mark_storage_images(fs);
     // 初始化列表的求值顺序在 C 里未定义；第二个集合的动态偏移接在第一个之后，必须按序调用。
     // Initializer-list evaluation order is unspecified in C; the second set's dynamic offsets follow the first,
     // so the two binds must be ordered statements.
@@ -122,12 +127,30 @@ static void draw_graphics_inner(const p_draw *draw,const p_draw_idx *indexed) {
     sets[1]=bind_shader(fs,NULL,dynamic_offsets,&dynamic_count);
     dm_cpu_phase_end(DM_CPU_PHASE_BIND,bind_phase);
     uint64_t layout_phase=dm_cpu_phase_begin();VkPipelineLayout layout=graphics_layout_get(vs,fs);dm_cpu_phase_end(DM_CPU_PHASE_LAYOUT,layout_phase);
-    uint64_t attach_phase=dm_cpu_phase_begin();VkImageView views[9]={0};image_entry *images[9]={0};VkAttachmentDescription attachments[9]={0};VkAttachmentReference colors[8]={0},depth={VK_ATTACHMENT_UNUSED,VK_IMAGE_LAYOUT_GENERAL};unsigned na=0;uint32_t width=UINT32_MAX,height=UINT32_MAX;
+    uint64_t attach_phase=dm_cpu_phase_begin();VkImageView views[9]={0};image_entry *images[9]={0};VkAttachmentDescription attachments[9]={0};VkClearValue clear_values[9]={0};VkAttachmentReference colors[8]={0},depth={VK_ATTACHMENT_UNUSED,VK_IMAGE_LAYOUT_GENERAL};unsigned na=0;uint32_t width=UINT32_MAX,height=UINT32_MAX;
     for(int i=0;i<state.rt.n;i++){
         colors[i]=(VkAttachmentReference){VK_ATTACHMENT_UNUSED,VK_IMAGE_LAYOUT_GENERAL};if(!state.rt.color[i])continue;image_entry *e=image_get(state.rt.color[i]);const view_t *v=state.rt.has_cview[i]?&state.rt.cview[i]:NULL;VkImageSubresourceRange range=texture_range(e,v);uint32_t w=dimension(e->texture.d.width,range.baseMipLevel),h=dimension(e->texture.d.height,range.baseMipLevel);if(w<width)width=w;if(h<height)height=h;
-        images[na]=e;views[na]=attachment_view(e,v);attachments[na]=(VkAttachmentDescription){.format=e->format,.samples=VK_SAMPLE_COUNT_1_BIT,.loadOp=e->populated?VK_ATTACHMENT_LOAD_OP_LOAD:VK_ATTACHMENT_LOAD_OP_DONT_CARE,.storeOp=VK_ATTACHMENT_STORE_OP_STORE,.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE,.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE,.initialLayout=VK_IMAGE_LAYOUT_GENERAL,.finalLayout=VK_IMAGE_LAYOUT_GENERAL};colors[i].attachment=na++;image_gpu_written(e);e->attachment_seen=1;
+        VkAttachmentLoadOp load_op=e->populated?VK_ATTACHMENT_LOAD_OP_LOAD:VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        if(e->pending_clear_color){
+            if(!memcmp(&e->pending_color_range,&range,sizeof range)){
+                load_op=VK_ATTACHMENT_LOAD_OP_CLEAR;clear_values[na].color=e->pending_color_value;
+                e->pending_clear_color=0;image_pending_clear_forget(e);
+            }else image_flush_pending_clear(e);
+        }
+        images[na]=e;views[na]=attachment_view(e,v);attachments[na]=(VkAttachmentDescription){.format=e->format,.samples=VK_SAMPLE_COUNT_1_BIT,.loadOp=load_op,.storeOp=VK_ATTACHMENT_STORE_OP_STORE,.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE,.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE,.initialLayout=VK_IMAGE_LAYOUT_GENERAL,.finalLayout=VK_IMAGE_LAYOUT_GENERAL};colors[i].attachment=na++;image_gpu_written(e);e->attachment_seen=1;
     }
-    if(state.rt.depth){image_entry *e=image_get(state.rt.depth);const view_t *v=state.rt.has_dview?&state.rt.dview:NULL;VkImageSubresourceRange range=texture_range(e,v);uint32_t w=dimension(e->texture.d.width,range.baseMipLevel),h=dimension(e->texture.d.height,range.baseMipLevel);if(w<width)width=w;if(h<height)height=h;images[na]=e;views[na]=attachment_view(e,v);attachments[na]=(VkAttachmentDescription){.format=e->format,.samples=VK_SAMPLE_COUNT_1_BIT,.loadOp=e->populated?VK_ATTACHMENT_LOAD_OP_LOAD:VK_ATTACHMENT_LOAD_OP_DONT_CARE,.storeOp=VK_ATTACHMENT_STORE_OP_STORE,.stencilLoadOp=e->populated?VK_ATTACHMENT_LOAD_OP_LOAD:VK_ATTACHMENT_LOAD_OP_DONT_CARE,.stencilStoreOp=VK_ATTACHMENT_STORE_OP_STORE,.initialLayout=VK_IMAGE_LAYOUT_GENERAL,.finalLayout=VK_IMAGE_LAYOUT_GENERAL};depth.attachment=na++;image_gpu_written(e);e->attachment_seen=1;}
+    if(state.rt.depth){image_entry *e=image_get(state.rt.depth);const view_t *v=state.rt.has_dview?&state.rt.dview:NULL;VkImageSubresourceRange range=texture_range(e,v);uint32_t w=dimension(e->texture.d.width,range.baseMipLevel),h=dimension(e->texture.d.height,range.baseMipLevel);if(w<width)width=w;if(h<height)height=h;
+        VkAttachmentLoadOp load_op=e->populated?VK_ATTACHMENT_LOAD_OP_LOAD:VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        VkAttachmentLoadOp stencil_load=e->populated?VK_ATTACHMENT_LOAD_OP_LOAD:VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        if(e->pending_clear_depth){
+            if(e->pending_depth_range.baseMipLevel==range.baseMipLevel&&e->pending_depth_range.baseArrayLayer==range.baseArrayLayer&&e->pending_depth_range.levelCount==range.levelCount&&e->pending_depth_range.layerCount==range.layerCount&&e->pending_depth_range.aspectMask==e->aspect){
+                load_op=VK_ATTACHMENT_LOAD_OP_CLEAR;
+                stencil_load=(e->aspect&VK_IMAGE_ASPECT_STENCIL_BIT)?VK_ATTACHMENT_LOAD_OP_CLEAR:VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                clear_values[na].depthStencil=e->pending_depth_value;
+                e->pending_clear_depth=0;image_pending_clear_forget(e);
+            }else image_flush_pending_clear(e);
+        }
+        images[na]=e;views[na]=attachment_view(e,v);attachments[na]=(VkAttachmentDescription){.format=e->format,.samples=VK_SAMPLE_COUNT_1_BIT,.loadOp=load_op,.storeOp=VK_ATTACHMENT_STORE_OP_STORE,.stencilLoadOp=stencil_load,.stencilStoreOp=VK_ATTACHMENT_STORE_OP_STORE,.initialLayout=VK_IMAGE_LAYOUT_GENERAL,.finalLayout=VK_IMAGE_LAYOUT_GENERAL};depth.attachment=na++;image_gpu_written(e);e->attachment_seen=1;}
     if(!na)die("Vulkan draw has no attachments");
     dm_cpu_phase_end(DM_CPU_PHASE_ATTACH,attach_phase);
     uint64_t pass_phase=dm_cpu_phase_begin();
@@ -135,8 +158,7 @@ static void draw_graphics_inner(const p_draw *draw,const p_draw_idx *indexed) {
     if(graphics_pass_matches(&pass_key,views,width,height))frame=graphics_active_frame;
     else {
         graphics_pass_end();
-        for(unsigned i=0;i<na;i++)if(i==depth.attachment)image_access(images[i],VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-            else image_access(images[i],VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        image_access_attachments_batch(na,images,depth.attachment);
         graphics_pass_entry *pass=graphics_pass_get(pass_key,attachments,colors,depth,1);frame=graphics_frame_get(pass,views,images,width,height);
     }
     dm_cpu_phase_end(DM_CPU_PHASE_PASSKEY,pass_phase);
@@ -188,7 +210,7 @@ static void draw_graphics_inner(const p_draw *draw,const p_draw_idx *indexed) {
     graphics_last_pipeline=cached;
     dm_cpu_phase_end(DM_CPU_PHASE_PIPELINE,pipe_phase);
     uint64_t state_phase=dm_cpu_phase_begin();
-    graphics_pass_begin(frame);
+    graphics_pass_begin(frame,clear_values,na);
     graphics_command_apply(cached->pipeline,layout,sets,dynamic_offsets,dynamic_count,&viewport,&scissor,state.blend_color.rgba,state.polygon_offset.units,state.polygon_offset.factor,state.stencil_faces);
     for(unsigned i=0;i<16;i++)if(vertex_buffers[i])graphics_command_vertices(i,vertex_buffers[i],offsets[i]);
     graphics_probe_draw(draw,indexed);

@@ -23,6 +23,28 @@ static inline void dm_ui_handheld_size(int width, int height, int *out_w, int *o
     *out_h = (int)((uint64_t)height / gcd * scale);
 }
 
+// Scale up proportionally (rounding to even dimensions) so neither axis drops below the
+// guest UI engine's 1280x720 minimum layout/scissor threshold.
+static inline void dm_ui_clamp_min_size(int width, int height, int min_w, int min_h,
+                                        int *out_w, int *out_h) {
+    if (width <= 0 || height <= 0) { *out_w = *out_h = 0; return; }
+    int w = width, h = height;
+    if (min_w > 0 && w < min_w) {
+        h = (int)(((int64_t)height * min_w + width / 2) / width);
+        w = min_w;
+    }
+    if (min_h > 0 && h < min_h) {
+        w = (int)(((int64_t)width * min_h + height / 2) / height);
+        h = min_h;
+    }
+    w = (w + 1) & ~1;
+    h = (h + 1) & ~1;
+    if (min_w > 0 && w < min_w) w = (min_w + 1) & ~1;
+    if (min_h > 0 && h < min_h) h = (min_h + 1) & ~1;
+    *out_w = w;
+    *out_h = h;
+}
+
 // Integer, aspect-preserving viewport fit. Round the dependent edge to the nearest
 // pixel; exact aspect ratios (including 20:9 -> 2400x1080) remain exact.
 static inline void dm_ui_fit_rect(int source_w, int source_h, int surface_w, int surface_h,

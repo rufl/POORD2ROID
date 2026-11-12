@@ -180,7 +180,8 @@ int main(void) {
         assert(mtl_last_fence()-submits_before==1&&render_passes-passes_before==1);mtl_read_texels(&target,0,0,&region,pixels,16*4,0);for(unsigned i=0;i<256;i++)assert(!memcmp(pixels+i*4,blue,4));
         printf("Vulkan batching: 96 draws, 1 submit/pass/query, %.2f ms, allocations=%llu reuse=%llu\n",(dm_android_clock_ns(CLOCK_MONOTONIC)-start)/1e6,(unsigned long long)buffer_allocations,(unsigned long long)buffer_reuses);
         uint64_t layout_before=graphics_layout_creations,pass_before=graphics_pass_creations,frame_before=graphics_frame_creations;submits_before=mtl_last_fence();passes_before=render_passes;
-        mtl_sub_begin();post_new(4);for(unsigned i=0;i<257;i++)draw_graphics(&triangle,NULL);mtl_sub_commit();assert(samples_passed==257*256);
+        unsigned flush_threshold=snapshot_flush_draws();
+        mtl_sub_begin();post_new(4);for(unsigned i=0;i<=flush_threshold;i++)draw_graphics(&triangle,NULL);mtl_sub_commit();assert(samples_passed==(uint64_t)(flush_threshold+1)*256);
         assert(mtl_last_fence()-submits_before==2&&render_passes-passes_before==2);
         assert(graphics_layout_creations==layout_before&&graphics_pass_creations==pass_before&&graphics_frame_creations==frame_before);
         // 真实顶点像素验证缓存复用与脏写失效；销池不能留下可复用的旧地址。
@@ -256,6 +257,7 @@ int main(void) {
     assert(pending_index_oracle_queries&&pending_index_oracle_nodes);
     printf("Vulkan pending index: %llu real query/old-chain equivalence checks, old chain nodes=%llu index tree nodes=%llu, all commit registration audits PASS (diagnostic suite, not game FPS)\n",(unsigned long long)pending_index_oracle_queries,(unsigned long long)pending_index_oracle_nodes,(unsigned long long)(pending_index_nodes[0]+pending_index_nodes[1]));
     assert(fence_wait_total_ns>0);
+    if(batch_times){mtl_set_frame(77);mtl_sub_begin();mtl_sub_commit();assert(mtl_gpu_ms(77)>=0.0);}
     if(batch_times){assert(gpu_total_ns>0);printf("Vulkan timestamps: %.3f ms GPU batches, %.3f ms fence waits PASS\n",gpu_total_ns/1e6,fence_wait_total_ns/1e6);}
     puts("Vulkan NVN: GPU copy, deferred events, overlap, CALL, fences and pool bounds PASS"); return 0;
 }

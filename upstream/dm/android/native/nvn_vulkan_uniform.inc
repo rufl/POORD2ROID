@@ -1,14 +1,22 @@
 // 完成后的批次复用映射 uniform 页；未完成的绘制始终保留各自的数据版本。
 // Reuse mapped uniform pages only after a batch completes; pending draws keep their own data versions.
+enum { UNIFORM_CHUNK_SLOTS = 64, UNIFORM_DRIVER_HISTORY = 8 };
 typedef struct uniform_chunk {
     vk_buffer buffer;
-    uint32_t used,dirty[16];
+    uint32_t used,dirty[UNIFORM_CHUNK_SLOTS];
     struct uniform_chunk *next;
 } uniform_chunk;
+typedef struct uniform_driver_entry {
+    VkDescriptorBufferInfo info;
+    uint8_t data[0x968];
+    uint32_t size;
+} uniform_driver_entry;
 typedef struct uniform_driver_cache {
     VkDescriptorBufferInfo info;
     uint8_t data[0x968];
     uint32_t size,state_valid;
+    uniform_driver_entry history[UNIFORM_DRIVER_HISTORY];
+    unsigned history_count,history_cursor;
 } uniform_driver_cache;
 static uniform_chunk *uniform_chunks,*uniform_current;
 static uint64_t uniform_stride,uniform_arena_bytes,uniform_driver_hits;
@@ -24,7 +32,10 @@ static void uniform_reset(void) {
     // descriptor_reset is called after this batch's fence, before any of its memory is overwritten.
     for(uniform_chunk *c=uniform_chunks;c;c=c->next)c->used=0;
     uniform_current=uniform_chunks;
-    for(unsigned stage=0;stage<6;stage++)for(unsigned kind=0;kind<2;kind++){uniform_drivers[stage][kind].size=0;uniform_drivers[stage][kind].state_valid=0;}
+    for(unsigned stage=0;stage<6;stage++)for(unsigned kind=0;kind<2;kind++){
+        uniform_drivers[stage][kind].size=0;uniform_drivers[stage][kind].state_valid=0;
+        uniform_drivers[stage][kind].history_count=0;uniform_drivers[stage][kind].history_cursor=0;
+    }
 }
 static uniform_chunk *uniform_chunk_new(void) {
     if(!uniform_stride){VkPhysicalDeviceProperties properties;vkGetPhysicalDeviceProperties(physical,&properties);
@@ -32,7 +43,7 @@ static uniform_chunk *uniform_chunk_new(void) {
         if(!alignment)alignment=1;uniform_stride=(65536+alignment-1)/alignment*alignment;
         if(properties.limits.maxUniformBufferRange<65536)die("Vulkan uniform range below 64 KiB");}
     uniform_chunk *c=calloc(1,sizeof *c);if(!c)die("Vulkan uniform arena allocation");
-    c->buffer=buffer_create(uniform_stride*16);memset(c->buffer.mapped,0,uniform_stride*16);
+    c->buffer=buffer_create(uniform_stride*UNIFORM_CHUNK_SLOTS);memset(c->buffer.mapped,0,uniform_stride*UNIFORM_CHUNK_SLOTS);
     uniform_arena_bytes+=c->buffer.capacity;immutable_buffer_bytes+=c->buffer.capacity;return c;
 }
 // 调用方必须立即完整覆盖 dirty 字节；仅旧数据尾部需要清零。
@@ -40,7 +51,7 @@ static uniform_chunk *uniform_chunk_new(void) {
 static VkDescriptorBufferInfo uniform_allocate_mode(uint32_t dirty,uint8_t **data,int overwrite) {
     if(dirty>65536)die("Vulkan uniform write range");
     if(!uniform_current){uniform_chunks=uniform_chunk_new();uniform_current=uniform_chunks;}
-    while(uniform_current->used==16){if(!uniform_current->next)uniform_current->next=uniform_chunk_new();uniform_current=uniform_current->next;}
+    while(uniform_current->used==UNIFORM_CHUNK_SLOTS){if(!uniform_current->next)uniform_current->next=uniform_chunk_new();uniform_current=uniform_current->next;}
     unsigned slot=uniform_current->used++;uint64_t offset=slot*uniform_stride;
     *data=(uint8_t*)uniform_current->buffer.mapped+offset;
     // 页最初全零；新前缀由调用方完整覆盖，仅清旧前缀多出的尾部，保留全部 64 KiB 零填充语义。
@@ -65,6 +76,18 @@ static VkDescriptorBufferInfo uniform_driver(unsigned stage,unsigned kind,const 
     uniform_driver_cache *cache=&uniform_drivers[stage][kind];
     uniform_driver_builds++;cache->state_valid=1;
     if(cache->size==size&&!memcmp(cache->data,data,size)){uniform_driver_hits++;return cache->info;}
+    for(unsigned i=0;i<cache->history_count;i++){
+        uniform_driver_entry *entry=&cache->history[i];
+        if(entry->size==size&&!memcmp(entry->data,data,size)){
+            cache->info=entry->info;memcpy(cache->data,data,size);cache->size=size;
+            uniform_driver_hits++;return entry->info;
+        }
+    }
     uint8_t *mapped;cache->info=uniform_allocate_overwrite(size,&mapped);memcpy(mapped,data,size);
-    memcpy(cache->data,data,size);cache->size=size;return cache->info;
+    memcpy(cache->data,data,size);cache->size=size;
+    uniform_driver_entry *entry=&cache->history[cache->history_cursor];
+    entry->info=cache->info;memcpy(entry->data,data,size);entry->size=size;
+    cache->history_cursor=(cache->history_cursor+1)%UNIFORM_DRIVER_HISTORY;
+    if(cache->history_count<UNIFORM_DRIVER_HISTORY)cache->history_count++;
+    return cache->info;
 }

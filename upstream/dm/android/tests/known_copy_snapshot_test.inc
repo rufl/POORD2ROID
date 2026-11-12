@@ -73,7 +73,7 @@ static void known_copy_cross_batch_test(void) {
     VkSemaphore gate=reference_gate_create();mtl_sub_begin();reference_gate_arm(gate,1);mtl_sub_copy((uintptr_t)source,(uintptr_t)guest,sizeof guest);
     vk_buffer backing=post_copy_first->source;uint64_t produced=async_raw_commit();mtl_sub_begin();
     assert(!mtl_wait(produced,0)&&atomic_load(&backing.owner->references)==1);
-    pthread_mutex_lock(&buffer_cache_lock);for(cached_buffer *entry=buffer_cache;entry;entry=entry->next)assert(entry->buffer.buffer!=backing.buffer);pthread_mutex_unlock(&buffer_cache_lock);
+    assert(!buffer_cache_contains(backing.buffer));
     memcpy(source+4,(float[4]){1,0,0,1},16);known_copy_graphics_state(&graphics,&target);state.ubo[1][0]=(p_bind_buf){.addr=(uintptr_t)(guest+4),.size=16};
     uint64_t hits=snapshot_known_copy_hits;p_draw triangle={.prim=NVN_DRAW_PRIMITIVE_TRIANGLES,.count=3};draw_graphics(&triangle,NULL);
     assert(snapshot_known_copy_hits==hits+1&&!memcmp(guest,(float[8]){0},sizeof guest)&&atomic_load(&backing.owner->references)==1);

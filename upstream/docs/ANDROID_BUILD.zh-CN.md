@@ -58,9 +58,9 @@ python dm/android/tools/build.py --game-run   --game-source ~/dm-work/build/andr
 
 默认分辨率为 1280×576（20:9）；旧配置中缺失或为空的分辨率也会迁移到此值。小米 11T 屏幕为 2400×1080（20:9）。游戏中保持纵向比例并使用完整 20:9 渲染目标，以横向显示更多世界内容；Android Vulkan 呈现器以有效的 NVN `WindowSetCrop` 为权威活动画面，逻辑尺寸仅在裁剪缺失或无效时作为后备；再将完整活动画面按比例适配到屏幕，不拉伸。主菜单与读取画面保持原生 16:9 比例居中显示（2400×1080 屏幕上，1920×1080 画面两侧各留 240 像素）；有效的界面页裁剪仍会保留。掌机档降低渲染像素数时仍须保持 20:9，例如 1920×864。
 截至目前找到的 [Switch 截图集](https://www.useapotion.com/2021/09/diablo-ii-resurrected-nintendo-switch-review/)是 16:9 截图，未标注掌机或底座模式。[Digital Foundry 的 Switch 技术分析摘要](https://www.nintenderos.com/2021/10/someten-a-test-el-apartado-tecnico-de-diablo-ii-resurrected-en-nintendo-switch/)报告底座模式约 900p、掌机模式约 720p（部分场景会降低）；这是像素分辨率，不代表超宽界面布局。因此截图可用于参考 UI 排布，不能作为两种模式各自几何的证据。
-Android 掌机布局档现继承 `ConsoleHD`，不再继承低分辨率 `ConsoleLV`；原有基档导致掌机分辨率下的面板几何不同。当前大字体覆盖层在既有 1.5 倍字号基础上再增大 15%（即源字号的 1.725 倍），并一并缩放数字型 `pointSize` 覆盖值。生成的底部 HUD 上移 48 个设计像素，不缩放图像或触摸框，以避开底部系统手势区域。这些修改属于游戏数据覆盖层；必须重新生成并导入数据覆盖层，单独更新通用 APK 不会更新已导入的游戏数据。主机几何测试与覆盖层生成已通过，但构建成功不等于已证明 11T 上所有面板/HUD 均可见且未裁切；仍需目标设备或匹配配置的渲染截图确认。
+Android 掌机布局档继承 `ConsoleHD`，不再继承低分辨率 `ConsoleLV`；原有基档导致掌机分辨率下的面板几何不同。APK 现在内置完整的普通与大字号 Android overlay：大字号仍是源字号 1.725 倍，普通档保留原始 profile。生成的底部 HUD 上移 48 个设计像素，腰带、难度与技能触摸区同步上移。启动时，带 `ctrl_touch` 的导入 overlay 或已知旧签名都会在其前面叠加当前 Android overlay；`font_large` 缺失时默认大字号，APK 用 archive SHA-256 判断是否需要刷新私有副本，不重导入多 GB 游戏数据。主机几何测试和覆盖层生成不等于已证明 11T 上所有 HUD 均可见且未裁切；仍需目标设备或匹配配置的渲染截图确认。
 
-Android 生成 HUD 时必须设 `DM_ANDROID_HUD=1`。Android 没有 iOS 的 UIKit `drawV4` 层，因此这个变体保留游戏原生的 HP/MP 数值、经验条与技能控件，不再把它们移出屏幕或藏到底图下。APK 0.6.85 对已知的旧 20:9 overlay 使用完整小 overlay 迁移（7,009,616 字节），无需重导入游戏数据。HUD 上移 48 个设计像素时，腰带、难度与技能触摸区同步上移，避免显示位置与命中位置分离；`t_touch_controls` 的 47/47 个用例、1580 项检查通过。构建时 AAPT 会丢弃点开头文件，所以 APK 内名为 `build.config`，native 在私有目录恢复为 `.build.config`；构建脚本核对最终 APK 内的全部迁移文件。
+Android 生成 HUD 必须设 `DM_ANDROID_HUD=1`。Android 没有 iOS 的 UIKit `drawV4` 层，因此变体保留游戏原生 HP/MP 数值、经验条与技能控件。构建将每个完整 overlay 的 `.build.config` 以 `build.config` 写进 APK（AAPT 会丢点开头文件），native 恢复为 `.build.config` 并验证归档摘要；不需要重导入游戏数据。
 
 
 ```bash
@@ -109,7 +109,7 @@ git tag v0.2 && git push origin v0.2
 包的入口是 `org.d2r.android.port.LauncherActivity`（Java），游戏本体是它启动的第二个页面 `D2RActivity`（不导出）。清单由 `build.py` 从仓库清单改写而来：替换必须正好命中一个 NativeActivity 块，否则直接报错退出；探针构建没有 dex，所以仍用纯原生清单、不出现 Java 页面。
 
 界面目前可用的设置是调试浮层开关与画面档位（掌机1280×720 / 主机1600×900），点“启动游戏”时写进应用私有 `files/temp/launch-settings.conf`，由 native 严格解析（键白名单、失败即中止启动，且不接受任意路径）。游戏文件与密钥两项**尚未接入**，只如实显示“未设置”。
-游戏内返回菜单提供 30 / 60 / 跟随屏幕最高刷新率三档；默认呈现上限为 60 Hz，已保存的 30 Hz 或“跟随”设置仍优先，高刷新率设备可手动选“跟随”。这是节拍请求，不代表游戏实测 FPS；场景负载与温度仍会限制性能。Vulkan 启动日志记录设备/驱动、扩展、subgroup 与关键格式能力；BC 贴图上传统计每 60 帧分别记录 CPU 解码和 GPU 计算提交情况，GPU 侧的主机准备耗时不包含 GPU 执行时间。Android 内存压力回调只释放已完成、空闲的上传缓冲区。
+游戏内返回菜单提供 30 / 60 / 跟随屏幕最高刷新率三档；新安装默认 60 Hz，已保存的 30 Hz 或“跟随”仍优先。画质 Auto / High / Balanced / Performance / Ultra 会写入同一启动配置，并在下次启动前由 native 应用，掌机与主机档一致。字号 − / + 不再调用游戏的 LowVisionMode：它只保存普通 / 大字号完整 overlay 的选择，下一次启动生效，避免重建不兼容的布局。这些都是节拍或渲染比例请求，不代表实测 FPS；场景负载与温度仍会限制性能。
 Bannerlator 的 Mali 路径用 BCn Vulkan layer 在 GPU 上转码压缩贴图。本项目是 NVN→Vulkan，不是 Wine/DXVK，因此采用进程内计算着色器解码 BC1–BC5，而非直接使用 Bannerlator 的 wrapper/layer。该优化仅用于 A/B：在应用私有 `files/temp/perf.conf` 写入 `bc_decode_gpu 1` 并重启；默认值 `0` 保持 CPU 路径。BC6H/BC7、1D/1D-array/3D 和过大贴图仍由 CPU 处理，管线初始化失败也回退 CPU。GPU 主机准备耗时不包括 GPU 执行；GPU 已受限的场景可能变慢，需在设备上对比持续帧时间后再决定是否启用。
 主机回归测试需要 Vulkan SDK/loader 和支持计算着色器的 GPU：用 `glslc --target-env=vulkan1.1 -O` 编译 `dm/android/native/shaders/bc_decode.comp`，再将 `dm/android/tests/bc_decode_vulkan_test.c` 与 `dm/gfx/tex/nvn_bcdec.c` 编译，并把生成的 SPIR-V 路径传给测试程序。测试在 432 种 BC1–BC5 格式/边缘尺寸组合下，将 GPU 输出与 CPU 解码结果逐像素比较；它不能证明 Mali 驱动稳定性或游戏 FPS。
 

@@ -29,12 +29,4 @@ static int dm_touch_overlay_is_legacy_install(const char *overlay, const char *c
     return n > 0 && (size_t)n < sizeof(path) && access(path, R_OK) == 0;
 }
 
-static int dm_touch_overlay_needs_repair(const char *overlay, const char *config_path) {
-    if (!dm_touch_overlay_is_legacy_install(overlay, config_path)) return 0;
-    char path[1200];
-    int n = snprintf(path, sizeof(path), "%s/ctrl_touch", overlay);
-    if (n <= 0 || (size_t)n >= sizeof(path) || access(path, R_OK)) return 1;
-    n = snprintf(path, sizeof(path), "%s/touch_strings.tsv", overlay);
-    return n <= 0 || (size_t)n >= sizeof(path) || access(path, R_OK);
-}
 #endif

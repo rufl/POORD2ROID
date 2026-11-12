@@ -82,11 +82,10 @@ public final class LauncherActivity extends Activity {
     private String packageSummary = "";
     private boolean importing;
     private volatile boolean cancelImport;
-    // The docked-size presets include native 20:9 output options for the Xiaomi 11T. The 1280x576 option is the
-    // performance choice: it keeps the 20:9 view while shading 20% fewer pixels than 1280x720; the 0.8 handheld
-    // profile preserves aspect ratio. The game image is upscaled by the Vulkan presenter to the actual display.
+    // The output presets keep at least 720p vertical UI height (guest UI layout clamps to 1280x720 minimum,
+    // so sub-720p targets clip the bottom HUD and options footer). Default 20:9 is 1600x720.
     private static final String[] RESOLUTION_PRESETS = {
-        "", "1280x576", "1600x720", "1920x864", "1280x720", "1600x900", "1920x1080", "2560x1440"
+        "", "1600x720", "1920x864", "2000x900", "1280x720", "1600x900", "1920x1080", "2560x1440"
     };
     // Keep System Vulkan, MaliSX2 and PanVK for Mali/kbase, plus Turnip for Qualcomm KGSL.
     private static final String[] DRIVER_STATES = {"system", "malisx2", "panvk", "turnip"};
@@ -521,6 +520,7 @@ public final class LauncherActivity extends Activity {
         // Upgrade missing and legacy empty resolution settings to the Xiaomi-wide default.
         // An empty value left by older launchers otherwise bypasses DM_GAME_RES and the game falls back to 800x600.
         resolutionIndex = preset == null || preset.isEmpty() ? 1 : 0;
+        if ("1280x576".equals(preset)) preset = "1600x720";
         if (preset != null && !preset.isEmpty()) {
             int found = -1;
             for (int i = 0; i < RESOLUTION_PRESETS.length; i++) if (RESOLUTION_PRESETS[i].equals(preset)) found = i;
@@ -953,7 +953,7 @@ public final class LauncherActivity extends Activity {
         content.append("debug_overlay=").append(overlaySwitch.isChecked() ? "1" : "0").append('\n');
         content.append("operation_mode=").append(handheld ? "handheld" : "console").append('\n');
         String presentHz = LaunchSettings.read(configFile(), "present_hz");
-        content.append("present_hz=").append(presentHz == null ? "30" : presentHz).append('\n');
+        content.append("present_hz=").append(presentHz == null ? "60" : presentHz).append('\n');
         if (resolutionIndex < 0) content.append("resolution=").append(customResolution).append('\n');
         else if (!RESOLUTION_PRESETS[resolutionIndex].isEmpty()) content.append("resolution=").append(RESOLUTION_PRESETS[resolutionIndex]).append('\n');
         content.append(LaunchSettings.foreign(configFile(), OWNED_KEYS));

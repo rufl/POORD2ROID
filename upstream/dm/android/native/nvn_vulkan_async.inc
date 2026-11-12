@@ -15,14 +15,33 @@ enum {ASYNC_FREE,ASYNC_RECORDING,ASYNC_PENDING};
 // bucketed index is not worth its risk; the original chain walk stays and the FIFO ordering is unchanged.
 // 每段至少 32 draw 且录制 2 ms，再在自然通道边界提交；每批最多八段。
 // Submit at natural pass boundaries after at least 32 draws and 2 ms of recording; cap each batch at eight chunks.
-enum {ASYNC_CHUNK_CAPACITY=8,ASYNC_CHUNK_MIN_DRAWS=32};
-#define ASYNC_CHUNK_RECORD_NS 2000000ull
-enum {ASYNC_QUERY_CAPACITY=1024,ASYNC_TIMESTAMP_BYTES=2*sizeof(uint64_t),
+enum {ASYNC_CHUNK_CAPACITY=DM_VK_MAX_CHUNKS};
+static unsigned async_chunk_min_draws(void) {
+    static int value=-1;
+    if(value<0){
+        const char *env=getenv("DM_VK_CHUNK_DRAWS");
+        int parsed=env&&*env?(int)strtol(env,NULL,10):perf_config_int("chunk_draws",32);
+        if(parsed<16)parsed=16;if(parsed>256)parsed=256;
+        value=parsed;
+    }
+    return (unsigned)value;
+}
+static uint64_t async_chunk_record_ns(void) {
+    static int64_t value=-1;
+    if(value<0){
+        const char *env=getenv("DM_VK_CHUNK_MS");
+        int parsed=env&&*env?(int)strtol(env,NULL,10):perf_config_int("chunk_ms",2);
+        if(parsed<0)parsed=0;if(parsed>16)parsed=16;
+        value=(int64_t)parsed*1000000ll;
+    }
+    return (uint64_t)value;
+}
+enum {ASYNC_QUERY_CAPACITY=1024,ASYNC_TIMESTAMP_BYTES=2*ASYNC_CHUNK_CAPACITY*sizeof(uint64_t),
       ASYNC_QUERY_READBACK_BYTES=ASYNC_TIMESTAMP_BYTES+ASYNC_QUERY_CAPACITY*sizeof(uint64_t)};
 typedef struct async_batch {
     VkCommandBuffer command;
     VkCommandBuffer chunks[ASYNC_CHUNK_CAPACITY];
-    unsigned chunk_count,chunk_index,chunk_draws;
+    unsigned chunk_count,chunk_index,chunk_draws,chunk_timestamps;
     uint64_t chunk_started;
     VkFence fence;
     VkQueryPool queries,times,counter_queries;
@@ -30,11 +49,16 @@ typedef struct async_batch {
     vk_buffer query_readback;
     post_op *posts,*copies;
     dm_pending_ranges pending_ranges;
+    uint64_t guest_frame;
     uint64_t ticket,temporary_base;
     uintptr_t known_copy_low,known_copy_high;
+    uintptr_t copy_low,copy_high;
     uintptr_t pending_low,pending_high;   // 区间索引登记范围的包围盒（保守超集）
+    uint64_t known_copy_bloom[8],copy_bloom[8],pending_bloom[8];
     uint32_t query_count;
-    int host_sync,has_known_cpu_copy,known_copy_unbounded,status,pending_any;
+    int host_sync,has_known_cpu_copy,known_copy_unbounded,known_copy_bloom_unbounded;
+    int has_any_copy,copy_unbounded,copy_bloom_unbounded;
+    int status,pending_any,pending_bloom_unbounded;
     struct async_batch *next;
 } async_batch;
 static async_batch async_batches[DM_VK_BATCH_SLOTS];
@@ -49,25 +73,27 @@ static void async_chunk_report(void) {
     static uint64_t frame,early,logical,submit_ns;
     if(!presents||presents%60||presents==frame)return;
     uint64_t span=presents-frame;
-    LOG("[vulkan-chunks] frame=%llu span=%llu early=%.2f/frame batches=%.2f/frame early_submit_wall=%.4f ms/frame max_chunks=%u min_draws=%u record_budget_ms=2 gpu_timestamp=logical_batch_span",
+    LOG("[vulkan-chunks] frame=%llu span=%llu early=%.2f/frame batches=%.2f/frame early_submit_wall=%.4f ms/frame max_chunks=%u min_draws=%u record_budget_ms=%.1f gpu_timestamp=per_chunk_sum",
         (unsigned long long)presents,(unsigned long long)span,(async_early_submits-early)/(double)span,
         (async_logical_submits-logical)/(double)span,(async_early_submit_ns-submit_ns)/(span*1e6),
-        ASYNC_CHUNK_CAPACITY,ASYNC_CHUNK_MIN_DRAWS);
+        ASYNC_CHUNK_CAPACITY,async_chunk_min_draws(),async_chunk_record_ns()/1e6);
     frame=presents;early=async_early_submits;logical=async_logical_submits;submit_ns=async_early_submit_ns;
 }
 // 仅绘制前的自然通道边界调用；不回收、不发布，也不重置批次资源或查询。
 // Called only before a draw at a natural pass boundary; never retire, publish, or reset batch resources/queries.
 static void async_chunk_boundary_locked(void) {
     async_batch *batch=async_current;
+    uint64_t record_ns=async_chunk_record_ns();
     if(!recording||!batch||batch->status!=ASYNC_RECORDING)die("Vulkan chunk without recording batch");
-    if(screen_submission||batch->chunk_index+1>=ASYNC_CHUNK_CAPACITY||batch_draws-batch->chunk_draws<ASYNC_CHUNK_MIN_DRAWS)return;
+    if(!record_ns||screen_submission||batch->chunk_index+1>=ASYNC_CHUNK_CAPACITY||batch_draws-batch->chunk_draws<async_chunk_min_draws())return;
     uint64_t now=dm_android_clock_ns(CLOCK_MONOTONIC);
-    if(!now||!batch->chunk_started||now<batch->chunk_started||now-batch->chunk_started<ASYNC_CHUNK_RECORD_NS)return;
+    if(!now||!batch->chunk_started||now<batch->chunk_started||now-batch->chunk_started<record_ns)return;
+    if(batch->times)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,batch->times,2*batch->chunk_index+1);
     VK_CHECK(vkEndCommandBuffer(command));
     VkSubmitInfo submit={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&command};
     // 同队列最终 fence 覆盖此前各段；客体 ticket 和 WSI 信号仍只在最终提交公布。
     // The final same-queue fence covers prior chunks; guest tickets and WSI signals remain exclusive to final submission.
-    VK_CHECK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));
+    pthread_mutex_lock(&vk_queue_lock);VK_CHECK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));pthread_mutex_unlock(&vk_queue_lock);
     uint64_t submitted_at=dm_android_clock_ns(CLOCK_MONOTONIC);
     if(submitted_at>=now)async_early_submit_ns+=submitted_at-now;
     async_early_submits++;batch->chunk_index++;
@@ -79,6 +105,7 @@ static void async_chunk_boundary_locked(void) {
     VK_CHECK(vkResetCommandBuffer(command,0));
     VkCommandBufferBeginInfo begin={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     VK_CHECK(vkBeginCommandBuffer(command,&begin));graphics_command_reset();
+    if(batch->times){vkCmdResetQueryPool(command,batch->times,2*batch->chunk_index,2);vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,batch->times,2*batch->chunk_index);}
     batch->chunk_draws=batch_draws;batch->chunk_started=dm_android_clock_ns(CLOCK_MONOTONIC);
 }
 #pragma weak nvn_dirty_publish_copy
@@ -113,6 +140,32 @@ static uint64_t pending_index_oracle_queries,pending_index_oracle_nodes;
 
 // 字段完成才登记；未知输出在 encoded 之前已可见，已知 CPU copy 仍保留原发布链。
 // Register only completed fields; unknown outputs are visible before encoding, while known CPU copies retain the original publication chain.
+enum { ASYNC_BLOOM_MAX_SIZE = 512u << 10 };
+static inline unsigned async_page_bit1(uint64_t page) {
+    uint64_t h = page * 0x9e3779b97f4a7c15ull; h ^= h >> 30; return (unsigned)(h & 511u);
+}
+static inline unsigned async_page_bit2(uint64_t page) {
+    uint64_t h = page * 0xbf58476d1ce4e5b9ull; h ^= h >> 27; return (unsigned)(h & 511u);
+}
+static void async_bloom_mark(uint64_t bloom[8],int *unbounded,uintptr_t start,uint64_t bytes) {
+    if(*unbounded||!bytes)return;
+    if(bytes>ASYNC_BLOOM_MAX_SIZE||bytes>UINTPTR_MAX-start){*unbounded=1;return;}
+    uint64_t first=start>>12,last=(start+bytes-1)>>12;
+    for(uint64_t page=first;page<=last;page++){
+        unsigned b1=async_page_bit1(page),b2=async_page_bit2(page);
+        bloom[b1>>6]|=1ull<<(b1&63u);
+        bloom[b2>>6]|=1ull<<(b2&63u);
+    }
+}
+static int async_bloom_may_hit(const uint64_t bloom[8],int unbounded,uintptr_t address,uint64_t size) {
+    if(unbounded||size>ASYNC_BLOOM_MAX_SIZE)return 1;
+    uint64_t first=address>>12,last=(address+size-1)>>12;
+    for(uint64_t page=first;page<=last;page++){
+        unsigned b1=async_page_bit1(page),b2=async_page_bit2(page);
+        if(((bloom[b1>>6]>>(b1&63u))&1u)&&((bloom[b2>>6]>>(b2&63u))&1u))return 1;
+    }
+    return 0;
+}
 static void post_register_range(post_op *p) {
     if(!recording||!async_current||!p||!p->order||p->range_registered)die("Vulkan pending range registration state");
     dm_pending_kind kind;uintptr_t address;uint64_t bytes;
@@ -124,19 +177,38 @@ static void post_register_range(post_op *p) {
             async_batch *batch=async_current;uintptr_t start=(uintptr_t)p->destination;
             // 无法表示的范围只允许原扫描；摘要永远不能批准一次复制。
             // Unrepresentable ranges force the original scan; summaries never authorize a copy.
-            if(p->size>UINTPTR_MAX-start)batch->known_copy_unbounded=1;
-            else if(!batch->known_copy_unbounded){uintptr_t end=start+p->size;
-                if(!batch->has_known_cpu_copy){batch->known_copy_low=start;batch->known_copy_high=end;}
-                else{if(start<batch->known_copy_low)batch->known_copy_low=start;if(end>batch->known_copy_high)batch->known_copy_high=end;}
+            if(p->size>UINTPTR_MAX-start){batch->known_copy_unbounded=1;batch->copy_unbounded=1;}
+            else{
+                uintptr_t end=start+p->size;
+                if(!batch->has_any_copy){batch->copy_low=start;batch->copy_high=end;}
+                else{if(start<batch->copy_low)batch->copy_low=start;if(end>batch->copy_high)batch->copy_high=end;}
+                async_bloom_mark(batch->copy_bloom,&batch->copy_bloom_unbounded,start,p->size);
+                if(!batch->known_copy_unbounded){
+                    if(!batch->has_known_cpu_copy){batch->known_copy_low=start;batch->known_copy_high=end;}
+                    else{if(start<batch->known_copy_low)batch->known_copy_low=start;if(end>batch->known_copy_high)batch->known_copy_high=end;}
+                }
+                async_bloom_mark(batch->known_copy_bloom,&batch->known_copy_bloom_unbounded,start,p->size);
             }
-            batch->has_known_cpu_copy=1;
+            batch->has_any_copy=1;batch->has_known_cpu_copy=1;
         }
         p->range_registered=1;return;}
     if(dm_pending_ranges_insert(&async_current->pending_ranges,kind,address,bytes,p->order)!=1)die("Vulkan pending range insert: %s",strerror(errno));
-    // 登记范围的包围盒：查询不与盒子重叠就一定不与任何登记重叠，省掉每绘制每绑定的树查询。
-    // Bounding box of the registered ranges: a query disjoint from the box is disjoint from every range.
-    {async_batch *b=async_current;if(!b->pending_any){b->pending_any=1;b->pending_low=address;b->pending_high=address+bytes;}
-     else{if(address<b->pending_low)b->pending_low=address;if(address+bytes>b->pending_high)b->pending_high=address+bytes;}}
+    // 登记范围的包围盒与页过滤器：不相交时跳过每绘制树查询，不漏判任何重叠。
+    // Bounding box + page filter of registered ranges: disjoint queries skip per-draw tree lookups with zero false negatives.
+    {async_batch *b=async_current;
+     if(p->kind==0&&p->destination&&p->size){
+         if(p->size>UINTPTR_MAX-(uintptr_t)p->destination)b->copy_unbounded=1;
+         else{
+             uintptr_t end=(uintptr_t)p->destination+p->size;
+             if(!b->has_any_copy){b->copy_low=(uintptr_t)p->destination;b->copy_high=end;}
+             else{if((uintptr_t)p->destination<b->copy_low)b->copy_low=(uintptr_t)p->destination;if(end>b->copy_high)b->copy_high=end;}
+             async_bloom_mark(b->copy_bloom,&b->copy_bloom_unbounded,(uintptr_t)p->destination,p->size);
+         }
+         b->has_any_copy=1;
+     }
+     if(!b->pending_any){b->pending_any=1;b->pending_low=address;b->pending_high=address+bytes;}
+     else{if(address<b->pending_low)b->pending_low=address;if(address+bytes>b->pending_high)b->pending_high=address+bytes;}
+     async_bloom_mark(b->pending_bloom,&b->pending_bloom_unbounded,address,bytes);}
     p->range_registered=1;pending_index_registered[kind]++;
     uint64_t records=async_current->pending_ranges.collections[0].count+async_current->pending_ranges.collections[1].count;
     if(records>pending_index_peak_records)pending_index_peak_records=records;
@@ -175,8 +247,17 @@ static void async_overlay_chain(const post_op *copies,uintptr_t address,void *de
     }
 }
 
+static int async_any_copy_may_overlap(const async_batch *batch,uintptr_t address,uint64_t size) {
+    if(!batch||!batch->has_any_copy)return 0;
+    if(!batch->copy_unbounded&&(address>=batch->copy_high||batch->copy_low>=address+size))return 0;
+    return async_bloom_may_hit(batch->copy_bloom,batch->copy_bloom_unbounded,address,size);
+}
+static int async_pending_may_overlap(const async_batch *batch,uintptr_t address,uint64_t size) {
+    if(!batch||!batch->pending_any)return 0;
+    if(address+size<=batch->pending_low||address>=batch->pending_high)return 0;
+    return async_bloom_may_hit(batch->pending_bloom,batch->pending_bloom_unbounded,address,size);
+}
 static int async_known_copy_may_overlap(const async_batch *batch,uintptr_t address,uint64_t size);
-
 static void async_overlay_copies(uintptr_t address,void *destination,uint64_t size) {
     if(!size||size>UINTPTR_MAX-address)return;
     for(const async_batch *b=async_first;b;b=b->next)if(async_known_copy_may_overlap(b,address,size))async_overlay_chain(b->copies,address,destination,size);
@@ -222,9 +303,8 @@ static int pending_batch_unknown(const async_batch *batch,uintptr_t address,uint
     // 盒子是保守超集，所以跳过树查询不会漏判；没有登记的批次直接答否。
     // Bounding-box fast path: a query disjoint from the box of the registered ranges is disjoint from
     // every one of them. The box is a conservative superset, so skipping the tree cannot miss an overlap.
-    if(!batch->pending_any)return 0;
-    if(address+size<=batch->pending_low||address>=batch->pending_high)return 0;
-    int result=pending_range_overlap(batch,DM_PENDING_UNKNOWN,address,size,DM_PENDING_ORDER_ALL)||pending_range_overlap(batch,DM_PENDING_HOST_EFFECT,address,size,DM_PENDING_ORDER_ALL);
+    int may_overlap=async_pending_may_overlap(batch,address,size);
+    int result=may_overlap&&(pending_range_overlap(batch,DM_PENDING_UNKNOWN,address,size,DM_PENDING_ORDER_ALL)||pending_range_overlap(batch,DM_PENDING_HOST_EFFECT,address,size,DM_PENDING_ORDER_ALL));
 #ifdef DM_VK_REFERENCE_GATES
     const post_op *copies=batch==async_current?post_copy_first:batch->copies,*posts=batch==async_current?post_first:batch->posts;
     int host_sync=batch==async_current?pending_host_sync:batch->host_sync;
@@ -244,6 +324,7 @@ static int async_unknown(uintptr_t address,uint64_t size) {
 typedef struct known_copy_read {
     const post_op *latest;
     uint64_t overlay_bytes;
+    uint64_t source_offset;
 } known_copy_read;
 static int async_known_copy_chain(const post_op *copies,const post_op *posts,int host_sync,uintptr_t address,uint64_t size,known_copy_read *read) {
     for(const post_op *p=copies;p;p=p->copy_next){
@@ -269,15 +350,13 @@ static int async_known_copy_chain(const post_op *copies,const post_op *posts,int
 // 请求范围已检查无溢出；此处只作负筛选，不回答覆盖、版本或 FIFO 可见性。
 // The request is already overflow-checked; only reject impossible overlap, never infer coverage, version or FIFO visibility.
 static int async_known_copy_may_overlap(const async_batch *batch,uintptr_t address,uint64_t size) {
-    return batch&&batch->has_known_cpu_copy&&(batch->known_copy_unbounded||
-        (address<batch->known_copy_high&&batch->known_copy_low<address+size));
+    if(!batch||!batch->has_known_cpu_copy)return 0;
+    if(!batch->known_copy_unbounded&&(address>=batch->known_copy_high||batch->known_copy_low>=address+size))return 0;
+    return async_bloom_may_hit(batch->known_copy_bloom,batch->known_copy_bloom_unbounded,address,size);
 }
-static int async_read_known_full_copy(uintptr_t address,void *destination,uint64_t size) {
-    // queue_lock 保证复制源仍不可变且未退役；只省客体整段读取和旧覆盖，不改变发布顺序。
-    // queue_lock keeps the immutable copy source alive; avoid only the base read/old overlays, without changing publication order.
-    if(!address||!destination||!size||size>UINTPTR_MAX-address)return 0;
-    // 所有已知目的的包围区间均不重叠才拒绝；可能重叠时保留完整原扫描。
-    // Reject only when every known-destination bounding interval is disjoint; otherwise retain the complete original scan.
+static int async_known_full_copy(uintptr_t address,uint64_t size,known_copy_read *out) {
+    if(!out||!address||!size||size>UINTPTR_MAX-address)return 0;
+    *out=(known_copy_read){0};
     known_copy_filter_calls++;
     int may_overlap=async_known_copy_may_overlap(async_current,address,size);
     for(const async_batch *b=async_first;!may_overlap&&b;b=b->next)may_overlap=async_known_copy_may_overlap(b,address,size);
@@ -290,10 +369,21 @@ static int async_read_known_full_copy(uintptr_t address,void *destination,uint64
     // 最新部分覆盖不能退回旧 full；合法非零偏移仅在实际 source 与 post 两个范围都包含时使用。
     // A latest partial write must never fall back to an old full one; validate nonzero offsets against both post and actual source bounds.
     if(address<start||size>p->size||address-start>p->size-size||!p->source.mapped||!p->source.owner||
-        size>p->source.size||address-start>p->source.size-size||read.overlay_bytes<size)return 0;
-    memcpy(destination,(const uint8_t*)p->source.mapped+address-start,size);
+        !p->source.owner->activation||size>p->source.size||address-start>p->source.size-size||read.overlay_bytes<size)return 0;
+    read.source_offset=address-start;*out=read;return 1;
+}
+static void async_account_known_full_copy(const known_copy_read *read,uint64_t size) {
     snapshot_known_copy_hits++;snapshot_known_copy_read_saved+=size;
-    snapshot_known_copy_overlay_saved+=read.overlay_bytes-size;snapshot_known_copy_final_bytes+=size;return 1;
+    snapshot_known_copy_overlay_saved+=read->overlay_bytes-size;snapshot_known_copy_final_bytes+=size;
+}
+static int async_read_known_full_copy(uintptr_t address,void *destination,uint64_t size) {
+    // queue_lock 保证复制源仍不可变且未退役；只省客体整段读取和旧覆盖，不改变发布顺序。
+    // queue_lock keeps the immutable copy source alive; avoid only the base read/old overlays, without changing publication order.
+    if(!destination)return 0;
+    known_copy_read read;
+    if(!async_known_full_copy(address,size,&read))return 0;
+    memcpy(destination,(const uint8_t*)read.latest->source.mapped+read.source_offset,size);
+    async_account_known_full_copy(&read,size);return 1;
 }
 
 #ifdef DM_VK_REFERENCE_GATES
@@ -325,9 +415,15 @@ static uint64_t async_batch_temporary_bytes(void) {
 
 static void async_publish_locked(async_batch *batch) {
     uint64_t started=dm_android_clock_ns(CLOCK_MONOTONIC);
-    if(batch->times){
-        uint64_t times[2];memcpy(times,batch->query_readback.mapped,sizeof times);
-        gpu_total_ns+=timestamp_delta(times[0],times[1],gpu_timestamp_bits)*gpu_timestamp_period;
+    if(batch->times&&batch->chunk_timestamps){
+        uint64_t times[2*ASYNC_CHUNK_CAPACITY],batch_gpu_ns=0;
+        memcpy(times,batch->query_readback.mapped,2*batch->chunk_timestamps*sizeof(uint64_t));
+        for(unsigned c=0;c<batch->chunk_timestamps;c++)
+            batch_gpu_ns+=(uint64_t)(timestamp_delta(times[2*c],times[2*c+1],gpu_timestamp_bits)*gpu_timestamp_period);
+        gpu_total_ns+=batch_gpu_ns;
+        gpu_frame_entry *gfe=&gpu_frame_ring[batch->guest_frame&15u];
+        if(!gfe->valid||gfe->frame!=batch->guest_frame){gfe->valid=1;gfe->frame=batch->guest_frame;gfe->ns=batch_gpu_ns;}
+        else gfe->ns+=batch_gpu_ns;
     }
     if(batch->query_count)memcpy(query_counts,(const uint8_t*)batch->query_readback.mapped+ASYNC_TIMESTAMP_BYTES,batch->query_count*sizeof *query_counts);
     graphics_probe_query_batch(batch->ticket,query_counts,batch->query_count);
@@ -420,7 +516,7 @@ static void async_initialize_locked(void) {
             VkFenceCreateInfo fence={.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};VK_CHECK(vkCreateFence(device,&fence,NULL,&batch->fence));
             VkQueryPoolCreateInfo query={.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,.queryType=VK_QUERY_TYPE_OCCLUSION,.queryCount=ASYNC_QUERY_CAPACITY};
             VK_CHECK(vkCreateQueryPool(device,&query,NULL,&batch->queries));
-            if(gpu_timestamp_bits&&gpu_timestamp_period>0){query.queryType=VK_QUERY_TYPE_TIMESTAMP;query.queryCount=2;VK_CHECK(vkCreateQueryPool(device,&query,NULL,&batch->times));}
+            if(gpu_timestamp_bits&&gpu_timestamp_period>0){query.queryType=VK_QUERY_TYPE_TIMESTAMP;query.queryCount=2*ASYNC_CHUNK_CAPACITY;VK_CHECK(vkCreateQueryPool(device,&query,NULL,&batch->times));}
         }
         // 每个 slot 的查询结果到真实 fence 完成后才读，长期容量不算临时快照。
         // Read each slot's results only after its real fence; exclude persistent capacity from temporary snapshots.
@@ -439,8 +535,9 @@ static void async_initialize_locked(void) {
 static void async_record_query_readback_locked(void) {
     async_batch *batch=async_current;
     if(!recording||!batch||batch->status!=ASYNC_RECORDING||used_queries>ASYNC_QUERY_CAPACITY)die("Vulkan asynchronous query readback state");
+    batch->chunk_timestamps=batch->chunk_index+1;
     VkQueryResultFlags flags=VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT;
-    if(batch->times)vkCmdCopyQueryPoolResults(command,batch->times,0,2,batch->query_readback.buffer,0,sizeof(uint64_t),flags);
+    if(batch->times)vkCmdCopyQueryPoolResults(command,batch->times,0,2*batch->chunk_timestamps,batch->query_readback.buffer,0,sizeof(uint64_t),flags);
     if(used_queries)vkCmdCopyQueryPoolResults(command,batch->queries,0,used_queries,batch->query_readback.buffer,ASYNC_TIMESTAMP_BYTES,sizeof(uint64_t),flags);
     if(!batch->times&&!used_queries)return;
     VkBufferMemoryBarrier barrier={.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,.dstAccessMask=VK_ACCESS_HOST_READ_BIT,.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.buffer=batch->query_readback.buffer,.offset=0,.size=ASYNC_QUERY_READBACK_BYTES};
@@ -449,18 +546,22 @@ static void async_record_query_readback_locked(void) {
 
 static unsigned async_begin_locked(void) {
     async_initialize_locked();
-    post0_publish_report();
-    async_chunk_report();
+    if(vulkan_diag_enabled()){post0_publish_report();async_chunk_report();}
     if(async_current||async_stopping)die("Vulkan asynchronous nested/stopping recording");
     for(;;){
         for(unsigned i=0;i<DM_VK_BATCH_SLOTS;i++){
             unsigned slot=(async_next_slot+i)%DM_VK_BATCH_SLOTS;async_batch *batch=&async_batches[slot];
             if(batch->status!=ASYNC_FREE)continue;
             if(batch->pending_ranges.collections[0].count||batch->pending_ranges.collections[1].count||batch->pending_ranges.live_nodes)die("Vulkan pending index reused before retirement");
-            batch->status=ASYNC_RECORDING;batch->has_known_cpu_copy=batch->known_copy_unbounded=0;batch->known_copy_low=batch->known_copy_high=0;batch->pending_any=0;batch->pending_low=0;batch->pending_high=0;
+            batch->status=ASYNC_RECORDING;batch->has_known_cpu_copy=batch->known_copy_unbounded=batch->known_copy_bloom_unbounded=0;
+            batch->has_any_copy=batch->copy_unbounded=batch->copy_bloom_unbounded=0;batch->pending_any=batch->pending_bloom_unbounded=0;
+            batch->known_copy_low=batch->known_copy_high=batch->copy_low=batch->copy_high=batch->pending_low=batch->pending_high=0;
+            memset(batch->known_copy_bloom,0,sizeof batch->known_copy_bloom);
+            memset(batch->copy_bloom,0,sizeof batch->copy_bloom);
+            memset(batch->pending_bloom,0,sizeof batch->pending_bloom);
             batch->temporary_base=active_buffer_bytes-read_cache_bytes-immutable_buffer_bytes;
             async_current=batch;async_next_slot=(slot+1)%DM_VK_BATCH_SLOTS;
-            batch->chunk_index=batch->chunk_draws=0;batch->command=batch->chunks[0];batch->chunk_started=0;
+            batch->chunk_index=batch->chunk_draws=batch->chunk_timestamps=0;batch->command=batch->chunks[0];batch->chunk_started=0;
             batch->counter_used=0;
             command=batch->command;gpu_fence=batch->fence;draw_queries=batch->queries;batch_times=batch->times;
             return slot;
@@ -501,7 +602,9 @@ static uint64_t async_commit_locked(void) {
     #ifdef DM_VK_REFERENCE_GATES
     reference_gate_submit(&submit);
 #endif
-    uint64_t ticket=atomic_fetch_add(&submitted,1)+1;VK_CHECK(vkQueueSubmit(queue,1,&submit,batch->fence));
+    batch->guest_frame=atomic_load(&guest_frame_index);
+    uint64_t ticket=atomic_fetch_add(&submitted,1)+1;
+    pthread_mutex_lock(&vk_queue_lock);VK_CHECK(vkQueueSubmit(queue,1,&submit,batch->fence));pthread_mutex_unlock(&vk_queue_lock);
     async_logical_submits++;
     batch->posts=post_first;batch->copies=post_copy_first;batch->host_sync=pending_host_sync;batch->query_count=used_queries;batch->ticket=ticket;batch->status=ASYNC_PENDING;batch->next=NULL;
     if(async_last)async_last->next=batch;else async_first=batch;async_last=batch;

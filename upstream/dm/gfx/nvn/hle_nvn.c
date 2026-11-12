@@ -787,9 +787,24 @@ void dm_gfx_suspend(int on) {
     pthread_mutex_unlock(&g_susp_mu);
     if (on) { mtl_drain(); LOG("[nvn] 图形挂起：在途 GPU 工作已清空"); } else LOG("[nvn] 图形恢复");
 }
+static int nvn_android_diag_enabled(void) {
+#ifdef __ANDROID__
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *env = getenv("DM_VK_DIAG");
+        enabled = env && *env && strcmp(env, "0") != 0;
+    }
+    return enabled;
+#else
+    return 1;
+#endif
+}
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
     gfx_enter();
-    uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
+    int diag = nvn_android_diag_enabled();
+    uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0;
+    uint64_t s0 = diag ? thr_sys_ns() : UINT64_MAX;
+    thr_counts(&i0, &y0);
     ((queue_t *)q)->submits++;
     mtl_sub_begin();
     mtl_sub_index((const uint64_t *)h, n);
@@ -801,9 +816,13 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
     uint64_t i1, y1; thr_counts(&i1, &y1); uint64_t dc = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - c0, di = i1 - i0;
     atomic_fetch_add(&g_cum_sub_cyc, y1 - y0);
 #ifdef __ANDROID__
-    uint64_t s1 = thr_sys_ns();
-    if (s0 != UINT64_MAX && s1 != UINT64_MAX && s1 >= s0) atomic_fetch_add(&g_cum_sub_sys_ns, s1 - s0);
-    else atomic_fetch_add(&g_sub_sys_unavailable, 1);
+    if (diag) {
+        uint64_t s1 = thr_sys_ns();
+        if (s0 != UINT64_MAX && s1 != UINT64_MAX && s1 >= s0) atomic_fetch_add(&g_cum_sub_sys_ns, s1 - s0);
+        else atomic_fetch_add(&g_sub_sys_unavailable, 1);
+    } else {
+        atomic_fetch_add(&g_sub_sys_unavailable, 1);
+    }
 #else
     atomic_fetch_add(&g_cum_sub_sys_ns, thr_sys_ns() - s0);
 #endif
@@ -899,9 +918,13 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     // Vsync blocks here (real-device NVN: when all textures in the swapchain are waiting for display, wait for the next one to be released), not in present -- the game often calls present while holding a lock
     uint64_t at = *idx < 4 ? o->avail[*idx] : 0, now = dm_detclock_enabled() ? guest_ns() : now_ns(), wait = at > now ? at - now : 0;
     if (!dm_detclock_enabled()) {   // 取图线程登记为时间约束线程（不再只在「来早了」时才登记：热态一直落后时也要声明） | Register the acquire thread as a time-constraint thread (no longer registered only when it "arrived early": it must also declare itself when it is constantly behind in the hot state)
+#ifndef __ANDROID__
         static uint64_t rt_period; uint64_t period = present_period(o);
         if (period && rt_period != period) { rt_period = period; set_time_constraint(period); }
         rt_comp_tick(period);
+#else
+        uint64_t period = present_period(o);
+#endif
         if (mtl_link_active()) { if (!mtl_link_wait_tick(period ? 2 * period : 33333333ull) && wait) sleep_until_ns(at); }   // DM_PRESENT_LINK：节拍完全跟显示节拍（跑得快就等下一拍，落后立刻走）；自己的 60 Hz 时钟只作等不到节拍时的兜底 | DM_PRESENT_LINK: pacing fully follows the display link (wait for the next display-link tick when running fast, go immediately when behind); our own 60 Hz clock is only the fallback when no display-link tick arrives
         else if (wait) sleep_until_ns(at);
     } else {   // DM_DETCLOCK_PACE=1（画面闸门用）：客体时钟按帧走的同时，每帧墙钟不短于一个步长——帧数与游戏内时间确定，后台加载线程每帧至少有一个步长的墙钟可用； | DM_DETCLOCK_PACE=1 (used by the screenshot gate): while the guest clock advances per frame, each frame's wall clock is no shorter than one step -- frame count and in-game time are deterministic, and the background loading thread has at least one step of wall clock available per frame;
@@ -1068,7 +1091,7 @@ static void tsummary(uint64_t frame) {
       if (k) { qsort(v, k, sizeof *v, dcmp); LOG("[nvn] 上屏 至帧 %llu：%u 帧，掉帧 %u（丢弃 %u），p99 %.2f ms；footprint %.0f MiB；亮度 %.2f；温控 %d", frame, k + discard, drop, discard, v[(k * 99) / 100 < k ? (k * 99) / 100 : k - 1], fp, br, dm_thermal_now()); }
       g_presn = 0; }
 #ifdef __ANDROID__
-    android_submit_stats(frame);
+    if (nvn_android_diag_enabled()) android_submit_stats(frame);
 #else
     { static uint64_t pi, pc, pd, pf; uint64_t ci = atomic_load(&g_cum_sub_instr), cc = atomic_load(&g_cum_sub_cpu_ns), ps_, dr_; mtl_stats(&ps_, &dr_);   // 翻译层 | translation layer
       if (pf && frame > pf && dr_ > pd) LOG("[nvn] 翻译 至帧 %llu：每次绘制 %.0f 条指令，每帧提交 %.2f M 条 / CPU %.3f ms，每帧绘制 %.0f", frame,
@@ -1231,10 +1254,16 @@ int (*g_nvn_loadscreen_up)(void);   // 宿主登记：读取画面此刻是否�
 NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     (void)q; win_t *o = (win_t *)w; o->presents++;
     static uint64_t prev_in, prev_out, prev_pass, prev_draw;
-    // 第一次进局的读取画面：后台管线预热没跑完就在这里等它（读取画面多停一会儿），进局后不在提交线程现编管线。预热早已完成时一次判断即过
-    // Loading screen on first entering a run: if the background pipeline warm-up has not finished, wait for it here (the loading screen stays a bit longer), so that after entering the run no pipelines are compiled on the fly on the submit thread. When warm-up finished long ago this passes with a single check
-    { static int gate;
-      if (!gate && g_nvn_loadscreen_up && g_nvn_loadscreen_up()) { gate = 1; int ms = mtl_warm_wait(15000); if (ms) LOG("[nvn] 进局读取画面等管线预热 %d ms", ms); } }
+    // 读取画面期间按帧推进有界串行管线预热（单帧 ≤250ms/64条，单次加载累计 ≤15000ms）；进局后绝不触发。
+    // Advance bounded serial pipeline warm-up across loading-screen presents (<=250ms per frame, <=15000ms per load); never during gameplay.
+    { static int warm_ms;
+      if (g_nvn_loadscreen_up && g_nvn_loadscreen_up()) {
+          if (warm_ms < 15000) {
+              int ms = mtl_warm_wait(250);
+              if (ms) { warm_ms += ms; if (warm_ms >= 15000 || !mtl_warm_wait(0)) LOG("[nvn] 进局读取画面串行管线预热累计 %d ms", warm_ms); }
+              else warm_ms = 15000;
+          }
+      } else warm_ms = 0; }
     present_cfg(o);
     gfx_enter();
     uint64_t t0 = now_ns();

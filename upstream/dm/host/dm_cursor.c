@@ -1022,7 +1022,12 @@ static int ui_classify(module_t *m, uint64_t root, int x, int y, char *hit, size
     // The settings page covers the pause menu, yet the pause menu's buttons still receive clicks (the game's dispatch does not look at who is on top): on a pause menu button and not on a clickable widget of the settings page = covered, do not click (same as "on a button covered by an upper panel").
     // Previously, while the settings page was open the whole pause menu layer was set invisible and written back on close - that is writing to the original game's widgets, violating the no-writes-to-original-widgets rule; changed to blocking here only on a hit
     { uint64_t st = ui_panel(root, "SettingsPanel"), xy = (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)y << 32);
-      uint64_t cp = ui_panel(root, "VideoOptionsPanel");   // 自定义页（借的视频页）与设置页并列、不是它的子控件：这一页上的勾选框也算「设置页自己可点的控件」（语言行的「中文」那格正落在暂停菜单按钮的位置上） | The Custom page (the borrowed video page) sits beside the settings page and is not its child: checkboxes on this page also count as "controls of the settings page itself that can be tapped" (the 「中文」 box of the language row lands exactly where the pause menu button is)
+      // Only the synthetic Custom page participates here; the stock Display VideoOptionsPanel must keep its native touch behavior.
+      uint64_t cp = ui_panel(root, "VideoOptionsPanel");
+      if (cp && !ui_find(cp, "TouchCustomRows", 0)) cp = 0;
+#ifdef __ANDROID__
+      if (!cp) { cp = ui_panel(root, "KeyBindingMenu"); if (cp && !ui_find(cp, "TouchCustomRows", 0)) cp = 0; }
+#endif
       if (st && *(uint8_t *)(st + 0x50) && !click_walk(st, xy, 1, (uint64_t)m->base) && !(cp && *(uint8_t *)(cp + 0x50) && click_walk(cp, xy, 1, (uint64_t)m->base))) {   // 设置页自己可点的控件照常；点在它的底板 / 列表空处时，游戏会把这一下交给底下的暂停菜单按钮 | The settings page's own clickable widgets work as usual; when the tap is on its backing / empty list space, the game would hand this tap to the pause menu button underneath
           static const char *const pl[] = { "PauseLayoutGarden", "PauseLayout" };
           for (int i = 0; i < 2; i++) { uint64_t pw = ui_panel(root, pl[i]); if (pw && *(uint8_t *)(pw + 0x50) && click_walk(pw, xy, 1, (uint64_t)m->base)) { snprintf(hit, hn, "设置页盖着的暂停菜单按钮（不点，可滚）"); return 11; }   /* 11：这一下不点下去，但从这里起手上下拖照常滚设置页的列表（自定义页各行的文字不是可点控件，玩家多半就在文字上滑） | 11: this tap is not pressed down, but a vertical drag starting here still scrolls the settings page list as usual (the text of the rows on the Custom page is not a clickable widget, and players mostly swipe right on the text) */ } } }
@@ -2790,30 +2795,8 @@ static void rs_pump(void) {   // 取手柄处（游戏主线程）每次调 | ca
 // 按键脚本的「发界面消息」步（hle_hid.c MSG:…）：任意线程登记，取手柄处（游戏主线程）发出。单槽，脚本一步一条
 // The key script's "send UI message" step (hle_hid.c MSG:...): registered from any thread, sent where the controller is fetched (game main thread). Single slot, one message per script step
 static char g_sendq[96]; static _Atomic int g_sendq_on;
-static _Atomic int g_font_want = -1, g_font_sent = -1;
-void dm_ui_font_large_request(int large) {
-    atomic_store(&g_font_want, large != 0);
-    LOG("[font] native LowVisionMode request=%s", large ? "large" : "normal");
-}
-static void font_request_pump(void) {
-    static int boot_read;
-    int want = atomic_load(&g_font_want);
-    if (!boot_read) {
-        boot_read = 1;
-        const char *e = getenv("DM_FONT_LARGE");
-        if (want < 0 && e && (!strcmp(e, "0") || !strcmp(e, "1"))) want = *e - '0';
-        if (want >= 0) atomic_store(&g_font_want, want);
-    }
-    if (want < 0 || want == atomic_load(&g_font_sent)) return;
-    module_t *m = main_module(); uint64_t root = 0;
-    if (!m) return; memcpy(&root, m->base + 0x2f05458, 8); if (!root) return;
-    fe_send("OptionsPanelMessage", "SetLowVisionMode", "");
-    atomic_store(&g_font_sent, want);
-    LOG("[font] LowVisionMode %s request delivered to UI root; visual confirmation requires a frame", want ? "large" : "normal");
-}
 void dm_ui_send_queue(const char *spec) { strlcpy(g_sendq, spec, sizeof g_sendq); atomic_store(&g_sendq_on, 1); }
 void dm_ui_frontend_pump(void) {   // 取手柄处调；各动作之间隔开几帧 | called where the controller is fetched; actions are spaced a few frames apart
-    font_request_pump();
     if (atomic_exchange(&g_sendq_on, 0)) { char b[96], *c1, *c2; strlcpy(b, g_sendq, sizeof b); c1 = strchr(b, ':'); if (c1) { *c1++ = 0; c2 = strchr(c1, ':'); if (c2) *c2++ = 0; fe_send(b, c1, c2 ? c2 : ""); } }
     // 诊断：DM_DBG_FE_SEND="帧:类别:动作:参数;…"（帧号从 DM_UI_TAPS_AT 命中起算）到帧直接往界面根控件发一条界面消息，探「某条消息此刻收不收」用
     // Diagnostics: DM_DBG_FE_SEND="frame:category:action:argument;..." (frame numbers count from the DM_UI_TAPS_AT hit) sends a UI message directly to the UI root widget at the frame, to probe "whether a given message is accepted right now"

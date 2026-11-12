@@ -75,6 +75,7 @@ static int read_settings(const char *path, char *content, int *present,
 static int parse_settings(char *content, dm_android_launch_settings *settings,
                           char *error, size_t capacity) {
     unsigned line_number = 0, seen = 0;
+    int profiles[2][4] = {{-2, -1, -1, -1}, {-2, -1, -1, -1}};
     char *line = content;
     do {
         line_number++;
@@ -89,6 +90,9 @@ static int parse_settings(char *content, dm_android_launch_settings *settings,
             if (!value) return fail(error, capacity, "launch settings line %u requires key=value", line_number);
             *value++ = 0;
             key = trim(key); value = trim(value);
+            int profile = -1;
+            if (!strncmp(key, "handheld_", 9)) { profile = 0; key += 9; }
+            else if (!strncmp(key, "console_", 8)) { profile = 1; key += 8; }
             unsigned bit;
             if (!strcmp(key, "operation_mode")) bit = 1;
             else if (!strcmp(key, "input_receipts")) bit = 2;
@@ -96,8 +100,15 @@ static int parse_settings(char *content, dm_android_launch_settings *settings,
             else if (!strcmp(key, "resolution")) bit = 8;
             else if (!strcmp(key, "present_hz")) bit = 16;
             else if (!strcmp(key, "font_large")) bit = 32;
+            else if (!strcmp(key, "quality_preset")) bit = 64;
+            else if (!strcmp(key, "auto_min")) bit = 128;
+            else if (!strcmp(key, "auto_max")) bit = 256;
+            else if (!strcmp(key, "diagnostics")) bit = 512;
             else return fail(error, capacity, "unknown launch settings key on line %u: %s", line_number, key);
-            if (seen & bit) return fail(error, capacity, "duplicate launch settings key on line %u: %s", line_number, key);
+            if (profile >= 0 && bit != 16 && bit != 64 && bit != 128 && bit != 256)
+                return fail(error, capacity, "invalid profile key on line %u: %s", line_number, key);
+            unsigned seen_bit = profile < 0 ? bit : bit << (profile ? 18 : 9);
+            if (seen & seen_bit) return fail(error, capacity, "duplicate launch settings key on line %u: %s", line_number, key);
             if (bit == 1) {
                 if (!strcmp(value, "handheld")) settings->operation_mode = 0;
                 else if (!strcmp(value, "console")) settings->operation_mode = 1;
@@ -123,20 +134,48 @@ static int parse_settings(char *content, dm_android_launch_settings *settings,
                     return fail(error, capacity, "launch settings line %u: present_hz must be 0 or 24-240", line_number);
                 if (hz != 0 && (hz < 24 || hz > 240))
                     return fail(error, capacity, "launch settings line %u: present_hz must be 0 or 24-240", line_number);
-                settings->present_hz = (int)hz;
+                if (profile < 0) settings->present_hz = (int)hz;
+                else profiles[profile][1] = (int)hz;
             } else if (bit == 32) {
                 if (!strcmp(value, "0")) settings->font_large = 0;
                 else if (!strcmp(value, "1")) settings->font_large = 1;
                 else return fail(error, capacity, "launch settings line %u: font_large must be 0 or 1", line_number);
+            } else if (bit == 64) {
+                int preset = 0; char tail = 0;
+                if (sscanf(value, "%d%c", &preset, &tail) != 1 || preset < -1 || preset > 3)
+                    return fail(error, capacity, "launch settings line %u: quality_preset must be -1 or 0-3", line_number);
+                if (profile < 0) settings->quality_preset = preset;
+                else profiles[profile][0] = preset;
+            } else if (bit == 128 || bit == 256) {
+                int percent; char tail;
+                if (sscanf(value, "%d%c", &percent, &tail) != 1 || percent < 50 || percent > 100)
+                    return fail(error, capacity, "launch settings line %u: Auto bounds must be 50-100", line_number);
+                if (profile >= 0) profiles[profile][bit == 128 ? 2 : 3] = percent;
+                else if (bit == 128) settings->auto_min = percent;
+                else settings->auto_max = percent;
+            } else if (bit == 512) {
+                if (!strcmp(value, "0")) settings->diagnostics = 0;
+                else if (!strcmp(value, "1")) settings->diagnostics = 1;
+                else return fail(error, capacity, "diagnostics must be 0 or 1");
             } else {
                 if (!strcmp(value, "0")) settings->input_receipts = 0;
                 else if (!strcmp(value, "1")) settings->input_receipts = 1;
                 else return fail(error, capacity, "launch settings line %u: input_receipts must be 0 or 1", line_number);
             }
-            seen |= bit;
+            seen |= seen_bit;
         }
         line = next;
     } while (line);
+    for (int i = 0; i < 2; i++) {
+        int low = profiles[i][2] < 0 ? (settings->auto_min < 0 ? 50 : settings->auto_min) : profiles[i][2];
+        int high = profiles[i][3] < 0 ? (settings->auto_max < 0 ? 100 : settings->auto_max) : profiles[i][3];
+        if (low > high) return fail(error, capacity, "Auto minimum exceeds maximum for profile %d", i);
+    }
+    int mode = settings->operation_mode == 1 ? 1 : 0;
+    if (profiles[mode][0] != -2) settings->quality_preset = profiles[mode][0];
+    if (profiles[mode][1] >= 0) settings->present_hz = profiles[mode][1];
+    if (profiles[mode][2] >= 0) settings->auto_min = profiles[mode][2];
+    if (profiles[mode][3] >= 0) settings->auto_max = profiles[mode][3];
     return 1;
 }
 
@@ -184,7 +223,9 @@ int dm_android_launch_settings_apply(const char *temporary_directory,
                                      char *error, size_t error_capacity) {
     if (error && error_capacity) error[0] = 0;
     char path[SETTINGS_PATH_BYTES], content[SETTINGS_BYTES + 1];
-    dm_android_launch_settings settings = {0, -1, -1, -1, -1, -1, -1, -1};
+    dm_android_launch_settings settings = {.operation_mode=-1, .input_receipts=-1, .debug_overlay=-1,
+        .resolution_width=-1, .resolution_height=-1, .present_hz=-1, .font_large=-1,
+        .quality_preset=-1, .auto_min=-1, .auto_max=-1, .diagnostics=-1};
     if (!make_path(temporary_directory, "launch-settings.conf", path, error, error_capacity)) return 0;
     if (!read_settings(path, content, &settings.present, error, error_capacity)) return 0;
     if (!settings.present) { if (result) *result = settings; return 1; }
@@ -192,14 +233,13 @@ int dm_android_launch_settings_apply(const char *temporary_directory,
     // 所有内容与需要的固定路径都验证完才进入环境写入；省略的键不清空其他来源设置。
     // Validate all content and required fixed paths before writing the environment; omitted keys do not clear settings supplied elsewhere.
     if (settings.input_receipts == 1 && !make_path(temporary_directory, "input-receipts.jsonl", path, error, error_capacity)) return 0;
-    environment_change changes[5] = {{0}};
+    environment_change changes[4] = {{0}};
     size_t count = 0;
     if (settings.operation_mode != -1) changes[count++] = (environment_change){.name = "DM_OPMODE", .value = settings.operation_mode ? "1" : "0"};
     if (settings.input_receipts != -1) changes[count++] = (environment_change){.name = "DM_HID_RECEIPT_LOG", .value = settings.input_receipts ? path : NULL};
     // 调试浮层开关：显式写 "0" 而不是清空变量，因为“关掉”本身就是要表达的设置。
     // Debug overlay toggle: write "0" explicitly rather than unsetting, because "hidden" is itself the setting.
     if (settings.debug_overlay != -1) changes[count++] = (environment_change){.name = "DM_DEBUG_OVERLAY", .value = settings.debug_overlay ? "1" : "0"};
-    if (settings.font_large != -1) changes[count++] = (environment_change){.name = "DM_FONT_LARGE", .value = settings.font_large ? "1" : "0"};
     // 分辨率：写成 DM_GAME_RES=宽x高，由 front_game_res 读（与 Mac/iOS 同一变量同一语义）。
     // Resolution: written as DM_GAME_RES=<w>x<h>, read by front_game_res, the same variable and semantics as Mac and iOS.
     char resolution[16];
