@@ -57,8 +57,8 @@ def run(args, **kwargs):
 PANVK_ARCHIVE_SHA256 = "7e97db4d79d81ec9461d1e0676b62a865561cb56e21c151693aa25ffbe749f1c"
 PANVK_LIBRARY_SHA256 = "80acd461bdf07f5fb99af5c7f516e272103340b6775c22dcd347a6d418c7ac0d"
 
-MALISX2_ARCHIVE_SHA256 = "feb44fcb0c459894cbf1b4e9403fd756db74f54e9b889fd652fbdc4043689034"
-MALISX2_LIBRARY_SHA256 = "89f28af3610c4dbc8797cffc1eea73a1f2af32bc2fea47ea719e119dc4e205f7"
+MALISX2_ARCHIVE_SHA256 = "71c1e3dc68ef1396d469f245019d42ab73980e48034095453b7be776195c3641"
+MALISX2_LIBRARY_SHA256 = "b80af8f6ed1d88a1e19d0538564e90de8f7e46f4e32f8daec7cb7a772e292721"
 
 
 def package_malisx2(archive_path, assets, licenses):
@@ -72,8 +72,8 @@ def package_malisx2(archive_path, assets, licenses):
     try:
         with zipfile.ZipFile(archive_path) as archive:
             metadata = json.loads(archive.read("meta.json"))
-            if (metadata.get("name") != "malisx2 0.4.1 (a833123f35)"
-                    or metadata.get("packageVersion") != "0.4.1+a833123f35"
+            if (metadata.get("name") != "malisx2 0.5.0 (9632d02e2f)"
+                    or metadata.get("packageVersion") != "0.5.0+9632d02e2f"
                     or metadata.get("minApi") != 29
                     or metadata.get("libraryName") != "libvulkan_malisx2.so"):
                 sys.exit("Unexpected MaliSX2 package metadata")
@@ -88,8 +88,8 @@ def package_malisx2(archive_path, assets, licenses):
     temporary.replace(output / "libvulkan_malisx2.so")
     (output / "driver.sha256").write_text(MALISX2_LIBRARY_SHA256 + "\n", encoding="ascii")
     (output / "NOTICE.txt").write_text(
-        "MaliSX2 0.4.1 (a833123f35), bundled from bmdhacks/malisx2.\n"
-        "Release: https://github.com/bmdhacks/malisx2/releases/tag/v0.4.1\n"
+        "MaliSX2 0.5.0 (9632d02e2f), bundled from bmdhacks/malisx2.\n"
+        "Release: https://github.com/bmdhacks/malisx2/releases/tag/v0.5.0\n"
         "Mesa-derived components use their respective licenses; source is pinned at\n"
         "https://github.com/bmdhacks/armsx2-turnip/tree/45ff8fac44d9132118d0dddd2ff49f5d827533fb\n"
         "Experimental alternate Vulkan driver. D2R/Android window presentation and Xiaomi 11T gameplay are unverified.\n"
@@ -97,7 +97,7 @@ def package_malisx2(archive_path, assets, licenses):
         encoding="utf-8")
     shutil.copyfile(ROOT / "prebuilt/MaliSX2-LICENSE.txt", licenses / "MaliSX2-LICENSE.txt")
     shutil.copyfile(output / "NOTICE.txt", licenses / "MaliSX2-NOTICE.txt")
-    print("MaliSX2 0.4.1 ICD: archive and library checksums verified", flush=True)
+    print("MaliSX2 0.5.0 ICD: archive and library checksums verified", flush=True)
 
 
 def sha256_file(path):
@@ -227,8 +227,8 @@ def main():
                         help="pinned JimVulkan r10 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-panvk", action="store_true",
                         help="明确构建不含 PanVK 的 APK")
-    parser.add_argument("--malisx2", type=Path, default=ROOT / "prebuilt/malisx2-0.4.1-a833123f35.zip",
-                        help="pinned MaliSX2 0.4.1 package; archive and library SHA-256 are verified")
+    parser.add_argument("--malisx2", type=Path, default=ROOT / "prebuilt/malisx2-0.5.0-9632d02e2f.zip",
+                        help="pinned MaliSX2 0.5.0 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-malisx2", action="store_true",
                         help="明确构建不含 MaliSX2 的 APK")
     parser.add_argument("--touch-overlay-migration", type=Path,

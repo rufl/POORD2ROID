@@ -141,13 +141,17 @@ def main():
         # 版本折算：Android 拒绝版本号倒退的安装，这条规则要有回归挡住。
         # The version mapping: Android refuses an install whose version code goes backwards, so it needs a regression.
         python_check("APK 版本折算（test_version）", "dm/android/tests/test_version.py")
-        compile_and_run("自定义 Vulkan 驱动回退策略", [ROOT / "tests/gpu_driver_fallback_test.c"],
-                        workspace / "gpu_driver_fallback", ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror"))
+        compile_and_run("Vulkan pipeline-cache 持久化信封（disk envelope）", [ROOT / "tests/pipeline_cache_test.c", ROOT / "native/legacy_digest.c"],
+                        workspace / "pipeline_cache_disk_test",
+                        ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))
         compile_and_run("NativeActivity 前台启动门", [ROOT / "tests/startup_gate_test.c"],
                         workspace / "startup_gate", ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror"))
         compile_and_run("Android 界面滚动/滑块手势分类", [ROOT / "tests/ui_gesture_test.c"],
                         workspace / "ui_gesture", ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror"))
 
+        compile_and_run("BC 解码自适应策略（GPU/CPU 选路 + 回退计数）", [ROOT / "tests/bc_decode_policy_test.c"],
+                        workspace / "bc_decode_policy_test",
+                        ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))
         compile_and_run("方向键/扳机映射（t_padmap）", [REPO / "dm/host/tests/t_padmap.c"], workspace / "t_padmap")
         # 启动设置：普通版与"环境写入失败"注入版都要跑（故障恢复那条只有注入版才覆盖）。
         launch = [ROOT / "native/launch_settings.c", ROOT / "tests/launch_settings_test.c"]
