@@ -6,7 +6,7 @@ English: [README.md](README.md) · 中文: [README.zh-CN.md](README.zh-CN.md)
 
 ## Download
 
-Baixe a versão mais recente em [Releases](https://github.com/rufl/POORD2OID/releases):
+Baixe a versão mais recente em [Releases](https://github.com/rufl/POORD2ROID/releases):
 
 1. `D2R-Android-port.apk` — aplicativo Android genérico.
 2. `d2r-package-kit-<versão>.zip` — ferramentas para gerar o pacote a partir dos seus próprios arquivos.

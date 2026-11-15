@@ -8,7 +8,7 @@ Português (Brasil): [README.pt-BR.md](README.pt-BR.md) · 中文：[README.zh-C
 
 **Option 1: download the built artifacts (recommended)**
 
-From [Releases](https://github.com/rufl/POORD2OID/releases) (CI publishes one whenever a `v*` tag is pushed):
+From [Releases](https://github.com/rufl/POORD2ROID/releases) (CI publishes one whenever a `v*` tag is pushed):
 
 1. `D2R-Android-port.apk` — the phone app. It contains **no game data**; the data comes from the package below.
 2. `d2r-package-kit-<version>.zip` — the kit for your PC: the source (the packing tools live in it) + the `d2r-package` skill + that APK + a one-page readme.
