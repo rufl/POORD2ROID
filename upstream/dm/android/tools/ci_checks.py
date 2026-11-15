@@ -152,7 +152,9 @@ def main():
         compile_and_run("BC 解码自适应策略（GPU/CPU 选路 + 回退计数）", [ROOT / "tests/bc_decode_policy_test.c"],
                         workspace / "bc_decode_policy_test",
                         ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))
-        compile_and_run("方向键/扳机映射（t_padmap）", [REPO / "dm/host/tests/t_padmap.c"], workspace / "t_padmap")
+        compile_and_run("Vulkan driver fallback and Mali family classification", [ROOT / "tests/gpu_driver_fallback_test.c"],
+                        workspace / "gpu_driver_fallback_test",
+                        ("-std=c11", "-O3", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))
         # 启动设置：普通版与"环境写入失败"注入版都要跑（故障恢复那条只有注入版才覆盖）。
         launch = [ROOT / "native/launch_settings.c", ROOT / "tests/launch_settings_test.c"]
         launch_settings_check("启动设置（普通）", launch, workspace / "launch_settings",

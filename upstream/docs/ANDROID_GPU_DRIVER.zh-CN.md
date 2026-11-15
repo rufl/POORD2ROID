@@ -244,11 +244,11 @@ port默认DM_OPMODE=1 Console/Boost，front_game_res(1)=1600×900，最新营地
 
 ## Vulkan 后端（System / MaliSX2 / PanVK / Turnip）
 
-启动器提供四种模式：`system` 始终可选；`malisx2` 是 bmdhacks MaliSX2 0.4.1，仅在 Android API 29+ 且存在 `/dev/mali0` 时显示；`panvk` 是 JimVulkan PanVK r10，仅在 Android API 31+ 且存在 `/dev/mali0` 时显示；`turnip` 是内置 Turnip T30，仅在 API 30+ 且存在 `/dev/kgsl-3d0` 时显示。因此 Xiaomi 11T 应显示 System、MaliSX2、PanVK，不显示 Turnip。
+启动器提供四种模式：`system` 始终可选；`malisx2` 是 MaliSX2 0.5.0，仅在 Android API 29+ 且存在 `/dev/mali0` 时显示；`panvk` 是 JimVulkan PanVK r10，仅在 Android API 31+ 且存在 `/dev/mali0` 时显示；`turnip` 是内置 Turnip T30，仅在 API 30+ 且存在 `/dev/kgsl-3d0` 时显示。因此 Xiaomi 11T 应显示 System、MaliSX2、PanVK，不显示 Turnip。
 
-MaliSX2 包来自 [上游 v0.4.1](https://github.com/bmdhacks/malisx2/releases/tag/v0.4.1)，锁定提交 `a833123f35f6988033de1f5e2569599ea985b67b`，构建同时验证 ZIP 和 `.so` SHA-256，APK 附带 MIT 许可证与 notice。上游列出 Mali-G77，但报告是在其他设备上测试；它是面向特定 Android Vulkan 应用的实验性驱动，不代表兼容 D2R。该版本未实现 MSAA。Native loader 不只验证 ARM vendor driver ID，还要求 GPU vendor `0x13b5` 且 `driverInfo` 标记 `malisx2`，避免把系统 Mali 驱动误认成已加载 MaliSX2。选择后使用 `require_custom=1`，身份或初始化失败即报错，不会暗中回退；玩家可主动切回 System 或 PanVK。
+MaliSX2 0.5.0 覆盖上游声明的 Mali-G31/G51/G52/G76、G57/G68/G77/G78/G78AE、G310/G510/G610/G710、G615/G715；PanVK r10 覆盖其发布说明中的 Bifrost/Valhall Mali 设备。Android 端不再按手机型号或单一 GPU 名称拒绝 Mali：`/dev/mali0` 通过后交给 Vulkan 能力探测，native 日志输出 `mali-bifrost`、`mali-valhall` 或 `mali-unknown`。这扩大了低端 Mali 型号的尝试范围，但不把实验驱动的 D2R 呈现、性能或稳定性变成保证。
 
-PanVK 包来自 [JimVulkan mali-panvk v1.6.0 / r10](https://github.com/JimVulkan/mali-panvk/releases/tag/v1.6.0)，构建固定校验 ZIP 与 `.so` SHA-256，并随 APK 分发上游 `NOTICE.txt`。r10 声明 Android API 31+，基于 Mesa 27.0.0-devel-58f2c55，支持 Valhall Mali-G77。native 端通过 AdrenoTools 注入 Android 平台 Vulkan loader，并严格要求最终 `driverID` 为 `VK_DRIVER_ID_MESA_PANVK`；PanVK namespace 会链接 Android 平台依赖，不把私有系统 `.so` 复制进 APK。选择失败不暗中切换；`system` 仍是显式回退。
+MaliSX2 包来自 [上游 v0.5.0](https://github.com/bmdhacks/malisx2/releases/tag/v0.5.0)，锁定提交 `9632d02e2f`，构建同时验证 ZIP 和 `.so` SHA-256，APK 附带 MIT 许可证与 notice。它仍是面向 Android Vulkan 应用的实验性驱动，未验证所有列出的 GPU，也未实现 MSAA。Native loader 不只验证 ARM vendor driver ID，还要求 GPU vendor `0x13b5` 且 `driverInfo` 标记 `malisx2`，避免把系统 Mali 驱动误认成已加载 MaliSX2。选择后使用 `require_custom=1`，身份或初始化失败即报错，不会暗中回退；玩家可主动切回 System 或 PanVK。
 
 历史记录：以下 r8 / FristOneRR 设备验证只代表旧版直接 ICD 加载路径，不代表当前 r9 的 Android 平台 loader 路径。
 

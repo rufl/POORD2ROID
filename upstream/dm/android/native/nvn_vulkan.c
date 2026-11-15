@@ -20,6 +20,7 @@
 #include <android/native_window.h>
 #define DM_VK_DISPATCH_CONTEXT vk_api
 #include "gpu_driver.h"
+#include "gpu_driver_policy.h"
 static dm_vk_driver vk_api;
 #endif
 #include <vulkan/vulkan.h>
@@ -449,8 +450,7 @@ static void gpu_report_capabilities(const VkPhysicalDeviceProperties *properties
                                     const VkPhysicalDeviceFeatures *features) {
     int mali=gpu_is_mali_properties(properties);
     atomic_store_explicit(&gpu_mali_family,mali,memory_order_release);
-    const char *profile=mali&&strstr(properties->deviceName,"Mali-G77")?"mali-g77":
-                        mali?"mali":"generic-vulkan";
+    const char *profile=dm_vk_mali_profile(properties->deviceName);
     LOG("[vulkan-device] profile=%s vendor_id=0x%04x device_id=0x%04x driver_version=0x%08x api=%u.%u.%u name=%s",
         profile,properties->vendorID,properties->deviceID,properties->driverVersion,
         VK_VERSION_MAJOR(properties->apiVersion),VK_VERSION_MINOR(properties->apiVersion),
