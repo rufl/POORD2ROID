@@ -2,7 +2,7 @@
 
 [English version](README.en.md) · [Código-fonte](https://github.com/rufl/POORD2OID) · [Licenças e créditos](THIRD-PARTY-NOTICES.md)
 
-Port Android experimental para executar a versão de Nintendo Switch de **Diablo II: Resurrected** em dispositivos Android compatíveis. O projeto usa código ARM64 do jogo e implementa uma camada NVN→Vulkan; não é um emulador convencional.
+Port Android experimental para executar a versão de NS de **Diablo II: Resurrected** em dispositivos Android compatíveis. O projeto usa código ARM64 do jogo e implementa uma camada NVN→Vulkan; não é um emulador convencional.
 
 > **Estado:** projeto experimental. Compatibilidade, estabilidade e desempenho variam por dispositivo, GPU, driver e versão do Android. Não há garantia de que o jogo funcione ou alcance uma taxa de quadros específica. Consulte [limitações e estado dos drivers](#drivers-e-compatibilidade).
 
