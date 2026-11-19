@@ -162,7 +162,12 @@ void dm_android_performance_frame_end(const void *window,int index) {
         if(!result){accepted++;work_total+=work_ns;wsi_total+=wsi_ns;}else {
             skipped++;
             __android_log_print(ANDROID_LOG_INFO,"D2R","[adpf] report failed (%d) tid=%d; close hint session",result,bound_tid);
-            api.close(session);session=NULL;bound_tid=0;
+            // 上报失败即关闭会话，但必须允许重建：否则 attempted 恒为 1，ADPF 一次失败后永久失效。
+            // A failed report closes the session, but recreation must stay possible; otherwise attempted stays 1
+            // and ADPF is dead for good after a single failure. Back off like the create-failure path.
+            api.close(session);session=NULL;bound_tid=0;attempted=0;
+            retry_after_cycle=cycles+retry_delay_cycles;
+            retry_delay_cycles=retry_delay_cycles<1800?retry_delay_cycles*2:3600;
         }
     }else skipped++;
     static int diag_env=-1;
