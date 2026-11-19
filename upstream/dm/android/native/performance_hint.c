@@ -32,10 +32,10 @@ static uint64_t retry_after_cycle;
 static uint32_t retry_delay_cycles=60;
 static int32_t bound_tid;
 static int64_t target_ns=16666667;
-static int paused,cycle_pending,cycle_invalid,cycle_index;
+static int paused,cycle_pending,cycle_invalid;
 static const void *cycle_window;
-static int32_t cycle_tid;
 static uint64_t cycle_start,cycle_wsi,accepted,skipped,cycles,work_total,wsi_total;
+
 
 static uint64_t monotonic_ns(void) {
     struct timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;
@@ -69,25 +69,28 @@ static void load_api(void) {
 }
 
 void dm_android_performance_frame_begin(const void *window,int index) {
+    (void)index;
     pthread_once(&load_once,load_api);
     if(!available||hal_unsupported)return;
     pthread_mutex_lock(&hint_lock);
-    // 重复 acquire 不能覆盖起点；等下次 present 丢弃歧义周期后再恢复。
-    // Repeated acquire cannot overwrite the start; discard the ambiguous cycle at present, then recover.
+    // 一帧内客体可能多次取图；重复 begin 只保留最早起点，不作废周期。
+    // A frame may acquire several textures; a repeated begin keeps the earliest start and never invalidates the cycle.
     if(!paused&&!hal_unsupported){
-        if(cycle_pending)cycle_invalid=1;
-        else {
-            cycle_pending=1;cycle_window=window;cycle_index=index;cycle_tid=gettid();cycle_start=monotonic_ns();cycle_wsi=0;
-            cycle_invalid=!window||index<0||index>=4||!cycle_start;
-        }
+        if(!cycle_pending){cycle_pending=1;cycle_window=window;cycle_start=monotonic_ns();cycle_wsi=0;cycle_invalid=!window||!cycle_start;}
+        else if(window)cycle_window=window;
     }
     pthread_mutex_unlock(&hint_lock);
 }
 
 void dm_android_performance_wsi_calls(uint64_t duration_ns) {
     pthread_mutex_lock(&hint_lock);
+    // WSI 可能在与 acquire 不同的线程上执行（本端口：acquire 在客体线程，present/WSI 在录制线程）。
+    // 按线程号作废会把每个周期都判死，ADPF 永远收不到一次上报。这里只保留算术溢出保护。
+    // WSI may run on a different thread than acquire (this port: acquire on the guest thread, present/WSI on
+    // the recording thread). Invalidating on thread identity killed every cycle and ADPF never received a
+    // single report; only the arithmetic overflow guard is kept here.
     if(cycle_pending&&!cycle_invalid){
-        if(cycle_tid!=gettid()||duration_ns>UINT64_MAX-cycle_wsi)cycle_invalid=1;
+        if(duration_ns>UINT64_MAX-cycle_wsi)cycle_invalid=1;
         else cycle_wsi+=duration_ns;
     }
     pthread_mutex_unlock(&hint_lock);
@@ -142,12 +145,16 @@ void dm_android_performance_set_target(int64_t target_duration_ns) {
 
 
 void dm_android_performance_frame_end(const void *window,int index) {
+    (void)index;
     uint64_t ended=monotonic_ns();int32_t tid=gettid();
     pthread_once(&load_once,load_api);
     pthread_mutex_lock(&hint_lock);
     if(paused||!available||hal_unsupported){cycle_clear();pthread_mutex_unlock(&hint_lock);return;}
     uint64_t elapsed=ended>=cycle_start?ended-cycle_start:0;
-    int valid=cycle_pending&&!cycle_invalid&&cycle_window==window&&cycle_index==index&&cycle_tid==tid&&elapsed>cycle_wsi;
+    // acquire 与 present/WSI 在本端口分属两个线程，取图索引也未必是出图那张；周期有效性只看窗口与墙钟。
+    // Acquire and present/WSI run on two different threads in this port, and the acquired index is not
+    // necessarily the presented one; cycle validity depends only on the window and the wall clock.
+    int valid=cycle_pending&&!cycle_invalid&&cycle_window==window&&elapsed>cycle_wsi;
     uint64_t work_ns=valid?elapsed-cycle_wsi:0,wsi_ns=cycle_wsi;
     // 周期墙钟保留真实依赖等待；仅扣 WSI 两个完整调用，含少量驱动CPU，不称为纯等待。
     // Cycle wall time retains dependency waits; subtract only both full WSI calls, including some driver CPU, not pure idle.
