@@ -27,9 +27,9 @@ static pthread_once_t load_once=PTHREAD_ONCE_INIT;
 static pthread_mutex_t hint_lock=PTHREAD_MUTEX_INITIALIZER;
 static APerformanceHintSession *session;
 static int available,attempted,reported,hal_unsupported;
-static unsigned create_failures;
+static unsigned retry_delay_cycles=60;
 static uint64_t retry_after_cycle;
-static uint32_t retry_delay_cycles=60;
+
 static int32_t bound_tid;
 static int64_t target_ns=16666667;
 static int paused,cycle_pending,cycle_invalid;
@@ -108,15 +108,11 @@ static void session_create_locked(int32_t tid) {
     }
     session=api.create(manager,&tid,1,target_ns);
     if(session){
-        attempted=1;create_failures=0;retry_after_cycle=0;retry_delay_cycles=60;
+        attempted=1;retry_after_cycle=0;retry_delay_cycles=60;
         bound_tid=tid;
         fprintf(stderr,"[dm] [adpf] session created tid=%d target_ns=%lld preferred_ns=%lld\n",bound_tid,(long long)target_ns,(long long)preferred);
         __android_log_print(ANDROID_LOG_INFO,"D2R","[adpf] session tid=%d target=%.3f ms preferred_report=%.3f ms",bound_tid,target_ns/1e6,preferred<0?-1:preferred/1e6);
-    }else if(++create_failures>=3){
-        hal_unsupported=1;
-        fprintf(stderr,"[dm] [adpf] session creation rejected %u times (tid=%d preferred_ns=%lld); disabling ADPF hints\n",
-                create_failures,tid,(long long)preferred);
-    }else {
+    }else{
         uint32_t delay=retry_delay_cycles;
         retry_after_cycle=cycles+delay;
         retry_delay_cycles=delay<1800?delay*2:3600;
@@ -177,9 +173,7 @@ void dm_android_performance_frame_end(const void *window,int index) {
 
 void dm_android_performance_close(void) {
     pthread_mutex_lock(&hint_lock);
-    if(session){api.close(session);session=NULL;}
     bound_tid=0;attempted=0;reported=0;retry_after_cycle=0;retry_delay_cycles=60;
-    create_failures=0;
     paused=1;cycle_clear();accepted=skipped=cycles=work_total=wsi_total=0;
     pthread_mutex_unlock(&hint_lock);
 }
