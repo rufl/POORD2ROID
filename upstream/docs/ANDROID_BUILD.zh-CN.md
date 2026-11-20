@@ -1,6 +1,6 @@
 # Android 构建与部署
 
-English: [README.md](ANDROID_BUILD.md)。实际状态见[源码冻结说明](ANDROID_RELEASE_SNAPSHOT.zh-CN.md)。
+English: [README.md](ANDROID_BUILD.md)。实际状态见[源码冻结说明](ANDROID_RELEASE_SNAPSHOT.zh-CN.md)，发布记录见[更新日志](../../CHANGELOG.md)。
 
 ## 环境
 
@@ -51,7 +51,7 @@ make -C dm/host dm_vault_tab.h dm_hud_exp.h dm_bright_levels.inc \
 这些生成文件被 Git 忽略，不随源码发布。更换游戏资源后需删除这三个生成文件，再运行上面的命令重新生成。
 
 ```bash
-python dm/android/tools/build.py --game-run   --game-source ~/dm-work/build/android/game   --shader-cache ~/dm-work/build/android/shaders/spirv
+python dm/android/tools/build.py --game-run --version v0.7.1   --game-source ~/dm-work/build/android/game   --shader-cache ~/dm-work/build/android/shaders/spirv
 ```
 
 输出 `dm/android/build/D2R-Android-port.apk`，包名 `org.d2r.android.port`。真实游戏APK包含本机派生的游戏模块，不随源码发布。
@@ -76,7 +76,7 @@ RomFS和着色器仅首次或资源版本变化时部署；更新APK保留应用
 `make_package.py` 现在保留游戏原始的 Console/Handheld 字体档，不再默认把游戏字体放大 1.5 倍。重新导入新数据包会移除旧包中的 1.5× 字体 overlay；只更新 APK 不会改动已导入资源。
 若要覆盖更新已有安装，必须沿用相同签名密钥；默认使用 `$DM_ANDROID_TOOLS/debug.keystore`。密钥不同时 Android 会拒绝更新，可用 `--keystore PATH` 指定已有密钥。
 
-启动器提供 System Vulkan、JimVulkan PanVK r10、MaliSX2 0.5.0（Mali kbase，`/dev/mali0`）以及 Qualcomm KGSL（`/dev/kgsl-3d0`）专用的内置 Turnip。Mali 路径没有手机型号白名单：只要设备暴露 `/dev/mali0` 就会进行能力探测，native 日志会把已知的 Mali-G31/G51/G52/G71/G72/G76 Bifrost 以及 G57/G68/G77/G78/G78AE/G310/G510/G610/G710/G615/G715 Valhall 归类。MaliSX2 与 PanVK 仍是实验性驱动；显示选项不代表驱动一定能呈现或运行 D2R。自定义驱动严格启动，失败不会静默回退；需要恢复时请明确选择 System。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
+启动器提供 System Vulkan、JimVulkan PanVK r10、MaliSX2 0.5.1（Mali kbase，`/dev/mali0`）以及 Qualcomm KGSL（`/dev/kgsl-3d0`）专用的内置 Turnip。Mali 路径没有手机型号白名单：只要设备暴露 `/dev/mali0` 就会进行能力探测，native 日志会把已知的 Mali-G31/G51/G52/G71/G72/G76 Bifrost 以及 G57/G68/G77/G78/G78AE/G310/G510/G610/G710/G615/G715 Valhall 归类。MaliSX2 与 PanVK 仍是实验性驱动；显示选项不代表驱动一定能呈现或运行 D2R。自定义驱动严格启动，失败不会静默回退；需要恢复时请明确选择 System。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
 
 Android 模拟外部存储上的 xattr 查询可能返回 `EOPNOTSUPP`。此时 RomFS 路径解析会直接使用物理文件名作为客体名（包括 `.build.config` 等点文件）；存档仍位于应用私有的 `files/save/`。
 Android APK 会在每次游戏读取设置前强制文字和语音为英文（`Language` / `VoiceLanguage` = `0`），覆盖旧的中文设置和 `lang_en` 选择，但保留其他设置与存档数据。此 Android 版本不提供游戏内语言切换。
@@ -95,8 +95,10 @@ Android APK 会在每次游戏读取设置前强制文字和语音为英文（`L
 **发布给玩家**：推一个 tag 即可，流水线会建 Release 并把 APK 与套件挂上去：
 
 ```bash
-git tag v0.2 && git push origin v0.2
+VERSION=vX.Y.Z; git tag "$VERSION" && git push origin "$VERSION"
 ```
+
+当前手工发布版本为 [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1)，提交 `4f0933a`；APK 为 `versionName=0.7.1-android-port`、`versionCode=701`，SHA-256 `fdc82bd5a33e9f081bf04c4cb8073358a50b9ebec5f48b85c0227323730c6312`。ARM64 构建通过，真机匹配 A/B 尚未执行。
 
 **为什么 CI 的 APK 不含游戏数据（壳模式）**：游戏模块和三张派生表（编年史仓库 / 经验 / 关卡亮度）都得从玩家自己的游戏文件生成，仓库里没有、也不该进 CI（见 `CONTRIBUTING.zh-CN.md` 的数据边界）。所以 APK 走**壳模式**：宿主里只带"表有多大"的条数（`dm/host/dm_vault_tab.h`、`dm_hud_exp.h`、`dm_bright_levels.inc` 是随源码提交的替身），内容在启动时从数据包的 `derived.tsv` 读（路径由前端经 `DM_DERIVED` 交给宿主）。数据包由玩家那边的 `make_package.py` 生成，三张表的内容自动打进包里。这样同一个 APK 谁都能装，数据各用各的。
 

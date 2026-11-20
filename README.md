@@ -1,6 +1,6 @@
 # POORD2ROID — Diablo II: Resurrected no Android na Mali-G77 MC9 / Xiaomi 11T
 
-[English version](README.en.md) · [Matriz completa de drivers](docs/ANDROID_GPU_DRIVER.pt-BR.md) · [Código-fonte](https://github.com/rufl/POORD2ROID) · [Licenças e créditos](THIRD-PARTY-NOTICES.md)
+[English version](README.en.md) · [Versão mais recente v0.7.2](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2) · [Changelog](CHANGELOG.md) · [Matriz completa de drivers](docs/ANDROID_GPU_DRIVER.pt-BR.md) · [Código-fonte](https://github.com/rufl/POORD2ROID) · [Licenças e créditos](THIRD-PARTY-NOTICES.md)
 
 Port Android experimental para executar a versão de NS de **Diablo II: Resurrected** em dispositivos Android compatíveis. O projeto usa código ARM64 do jogo e implementa uma camada NVN→Vulkan; não é um emulador convencional.
 
@@ -16,10 +16,12 @@ O APK contém o launcher e o port, não os dados do jogo. Use o fluxo de importa
 
 ## Instalação e uso
 
-1. Obtenha um APK em [Releases](https://github.com/rufl/POORD2ROID/releases) ou construa-o conforme [`docs/BUILD_ON_WINDOWS.md`](docs/BUILD_ON_WINDOWS.md). Instale apenas um APK cuja origem e assinatura você confie.
+1. Obtenha o APK atual na [v0.7.2](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2), consulte todas as [Releases](https://github.com/rufl/POORD2ROID/releases) ou construa-o conforme [`docs/BUILD_ON_WINDOWS.md`](docs/BUILD_ON_WINDOWS.md). Instale apenas um APK cuja origem e assinatura você confie.
 2. Abra o launcher e importe o pacote de dados preparado a partir dos seus próprios arquivos do jogo.
 3. Escolha **System Vulkan** primeiro. Teste drivers alternativos individualmente apenas se forem listados para o dispositivo.
 4. Inicie o jogo. Para problemas, consulte os logs descritos no guia de build e abra uma issue com modelo do aparelho, Android, GPU, driver selecionado e logs relevantes — nunca inclua chaves ou arquivos do jogo.
+
+A versão v0.7.2 adiciona o agrupamento de threads ADPF, atualiza o MaliSX2 para 0.5.1 e mantém a rota nativa da aba Display. O build ARM64 foi concluído, mas não havia dispositivo Android conectado para um A/B equivalente; não há alegação de ganho de FPS. Versão, tamanho e SHA-256 do APK estão no [changelog](CHANGELOG.md).
 
 O launcher oferece controles táteis e suporte a controles Android/HID. O GameSir G8+ não foi validado especificamente; seu funcionamento depende de como o Android o apresenta como controle compatível.
 
@@ -30,7 +32,7 @@ O menu mostra apenas as opções compatíveis com a configuração reconhecida; 
 | Opção | Hardware/estado conhecido |
 | --- | --- |
 | **System Vulkan** | Driver Vulkan do fabricante; baseline recomendado para diagnóstico e fallback. |
-| **MaliSX2 0.5.0** | Mali kbase via `/dev/mali0`, Android API 29+. Preferido para G31/G51/G52/G57/G68/G76/G77/G78/G78AE/G310/G510/G610/G710/G615/G715. Experimental e sem MSAA. |
+| **MaliSX2 0.5.1** | Mali kbase via `/dev/mali0`, Android API 29+. Preferido para G31/G51/G52/G57/G68/G76/G77/G78/G78AE/G310/G510/G610/G710/G615/G715. Experimental e sem MSAA. |
 | **JimVulkan PanVK r10** | Mali kbase via `/dev/mali0`, Android API 31+. Preferido para G71/G72 e alternativa para Bifrost/G77-class. Experimental/não conformante. |
 | **Mesa Turnip T30** | Qualcomm/Adreno via KGSL, Android API 30+. Nunca usar em Mali. |
 

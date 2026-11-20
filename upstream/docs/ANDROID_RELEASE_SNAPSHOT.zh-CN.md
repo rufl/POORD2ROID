@@ -1,6 +1,6 @@
 # Android 源码冻结说明
 
-日期：2026-10-16。按用户要求暂停性能开发，整理当前源码至私有仓库 sydeEvans/d2r-android。本文描述该次快照的边界；后续进展与继续入口见 [Android 移植进度](ANDROID_PORT_PROGRESS.zh-CN.md)。
+日期：2026-10-16。本文是当时按用户要求暂停性能开发时的历史源码快照边界，不再代表当前最新版本。当前公开版本为 [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1)（2026-11-20，提交 `4f0933a`）；完整发布记录见[更新日志](../../CHANGELOG.md)，后续进展与继续入口见 [Android 移植进度](ANDROID_PORT_PROGRESS.zh-CN.md)。
 
 ## 验证边界
 

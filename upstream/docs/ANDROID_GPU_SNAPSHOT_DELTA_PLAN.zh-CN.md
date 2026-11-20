@@ -1,19 +1,21 @@
 # Android GPU只读快照增量实现计划
 
-**当前安装为 `adpf-cycle-20261016.apk`：** 分项帧耗时与ADPF周期计量修复已编译、安装、采集。营地均35.82387FPS，1800帧>33.333ms207次（本轮基线295次），最慢50.634ms；一次非温控对照不能保证稳定收益，60FPS未达到。入口 `~/dm-work/research/android-adpf-cycle-20261016/handoff.zh-CN.md`。未写或运行测试，以下为历史。
+**2026-11-20 当前源码/发布：** [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1)（提交 `4f0933a`）已把 deferred `post_op` 元数据改成64项分块复用，并将保守复制页过滤器从512位/512 KiB扩大到8192位/8 MiB。可能命中仍走原精确 FIFO 链；ARM64 APK 构建通过，未连接设备做 A/B，不宣称 FPS 收益。下列“当前安装”与各版数据均为2026-10-16历史现场。
 
-**最新为第七版：** `binding-plan-20261016.apk` 正常构建和安装成功，真机营地4200–6000帧31窗均36.54258FPS（33.49–40.63），同4009,4929画面正常，60FPS未达到。新改动是不可变着色器绑定规划和上下文入口命中路径免NZCV保存恢复，动态读/上传/同步及线程缓存检查未削减。frame6000 CPU提交10.946ms、GPU clone0、UBO fallback/errors0。未写或运行测试。证据与后续入口 `~/dm-work/research/android-binding-plan-20261016/handoff.zh-CN.md`；以下第六版数据和旧计划按历史保留。
+**2026-10-16 历史安装为 `adpf-cycle-20261016.apk`：** 分项帧耗时与ADPF周期计量修复已编译、安装、采集。营地均35.82387FPS，1800帧>33.333ms207次（本轮基线295次），最慢50.634ms；一次非温控对照不能保证稳定收益，60FPS未达到。入口 `~/dm-work/research/android-adpf-cycle-20261016/handoff.zh-CN.md`。未写或运行测试，以下为历史。
+
+**2026-10-16 当时最新为第七版：** `binding-plan-20261016.apk` 正常构建和安装成功，真机营地4200–6000帧31窗均36.54258FPS（33.49–40.63），同4009,4929画面正常，60FPS未达到。新改动是不可变着色器绑定规划和上下文入口命中路径免NZCV保存恢复，动态读/上传/同步及线程缓存检查未削减。frame6000 CPU提交10.946ms、GPU clone0、UBO fallback/errors0。未写或运行测试。证据与后续入口 `~/dm-work/research/android-binding-plan-20261016/handoff.zh-CN.md`；以下第六版数据和旧计划按历史保留。
 
 2026-10-16。状态：**第六版已实际安装并进入同4009,4929营地，2400–4200帧均35.09129FPS（32.37–41.88），画面正常。** 大GPU clone为0、UBO heap快读全命中，99.98%必败复制搜索已跳过；当前仍未达到60FPS。没有温度匹配A/B，不能将版本间差额全部归为代码收益。
 
 **用户最新要求：不要再写测试，专注实际移植优化。** 此后不新增/运行测试或fixture，直接修改生产实现、独立编译、正常APK构建及真机画面/计数/FPS验证；下方测试记录是该指令之前已完成的历史，不作为继续扩测试的计划。
 
-## 本轮当前交接入口
+## 2026-10-16 当时交接入口
 
-- 当前安装第六版`~/dm-work/build/android/checkpoints/word-hash-20261016.apk`，97,886,317字节；正常build exit0/16.846秒，冻结源构建前后一致，install-r Success/2.822秒，没有运行测试套件。仅改`pass.inc::graphics_hash`，8B/完整尾字节用memcpy安全载入、长度入种子、最终混合；四调用者完整key比较不变，不修改key/padding/持久化/driver cache。证据`~/dm-work/research/android-word-hash-20261016/`。
+- 当时安装第六版`~/dm-work/build/android/checkpoints/word-hash-20261016.apk`，97,886,317字节；正常build exit0/16.846秒，冻结源构建前后一致，install-r Success/2.822秒，没有运行测试套件。仅改`pass.inc::graphics_hash`，8B/完整尾字节用memcpy安全载入、长度入种子、最终混合；四调用者完整key比较不变，不修改key/padding/持久化/driver cache。证据`~/dm-work/research/android-word-hash-20261016/`。
 - 第六版实际menu207/Play360、4200帧采集exit0/120.475秒；同4009,4929、摇杆居中、材质正常。2400–4200三十一窗均35.09129FPS（32.37–41.88），GPU均10.970ms；不能用峰值41.88代替稳定帧率。截图`camp/device.png`，完整窗口`metrics-summary.json`。
 - 第六版frame4200 submit wall19.397/CPU11.590/kernel1.853ms，dirty43.0calls/0.460ms、fault23.6/prepared258页；UBO heap4319次/4.587MiB、fallback/errors0，known-filter4413.67次中4412.67次负筛选（99.98%），snapshot GPU_clone0/inplace1、raw及所有拒绝0。每帧GPU约11ms、CPU提交仍约12ms且存在真实完成等待，60FPS尚未达成；下一轮需依据本版profile定位剩余主线程工作与依赖，而非再靠省大块复制。
-- 第六版继续4800–9480共79窗均35.04101FPS（30.75–47.09），GPU clone继续0且fallback0；峰值47.09不代表稳定帧率。当前生产源逐项hash仍与已安装APK构建freeze一致，`final-source-state.json`实际true，没有遗留未部署的生产改动。
+- 第六版继续4800–9480共79窗均35.04101FPS（30.75–47.09），GPU clone继续0且fallback0；峰值47.09不代表稳定帧率。当时生产源逐项hash仍与已安装APK构建freeze一致，`final-source-state.json`实际true，没有遗留未部署的生产改动。
 - 第六版新的12秒真实profile完成，12110 samples/lost0；user-cycle self：draw2.70%、bind5.26%、context入口7.71%、memcpy6.44%、pending-tree2.05%、snapshot_buffer2.24%，known-full原扫描已不在主要热点。最热线程14.34秒窗口user8.06/kernel1.31秒。原始APK对应symfs、record、报告与前后画面/输入保留于当前证据`cpu-profile/`；各比例不是wall ms，也不能把比例变动直接当耗时差。下一步重点依据该版定位bind_shader与入口工作，结合真实依赖等待判断可减少的CPU工作；ADPF会话只做一次性实际取证后再定分账修复。
 - 第五版正常build exit0/16.844秒、install-r Success/3.290秒，97,886,317字节；fresh菜单187/Play360，营地4200帧采集exit0/123.972秒，同4009,4929、摇杆居中、画面正常。2400–4200三十一窗均34.29968FPS（31.49–37.87），GPU均11.13323ms；没有温度匹配A/B，不报告稳定提速百分比。
 - 第五版真实known-filter每帧约4413.67次查询中4412.67次负筛选、仅1次原扫描（99.98%）；UBO heap约4319次/4.587MiB、fallback/errors0；snapshot GPU_clone0/inplace1/fallback0。frame4200 submit wall21.177/CPU12.892/kernel1.559ms，dirty43.8calls/0.486ms、fault24.3/prepared258页。最大的CPU整块读取、GPU整块clone与页面保护放大已消除，仍有原生guest逻辑和绘制CPU/真实GPU等待耗时，不能称60FPS完成。

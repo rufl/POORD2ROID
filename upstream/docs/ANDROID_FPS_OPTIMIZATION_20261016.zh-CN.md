@@ -1,10 +1,14 @@
 # Android 帧率优化：2026-10-16
 
+**发布状态（2026-11-20）：** 下述 deferred-post 元数据池与异步复制页过滤器扩大已随 [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1)（提交 `4f0933a`）发布。APK 为 `0.7.1-android-port` / code 701，SHA-256 `fdc82bd5a33e9f081bf04c4cb8073358a50b9ebec5f48b85c0227323730c6312`。ARM64 构建通过，未连接设备做匹配 A/B，不宣称实测 FPS 收益。
+
 **Xiaomi 11T 20:9 presentation A/B (experimental, default off):** set `present_bar_blit 1` in `$DM_TEMP/perf.conf` to replace the full-surface black clear with black-source blits limited to the unused letterbox regions. Unsupported source formats or image allocation failures retain the full-clear path; `present_bar_blit 0` restores the baseline. The 60-frame `[vulkan-time]` entry reports full-clear, bars-blit, and fallback counts. Compare the same scene, backend, profile, and thermal state; this change has no measured FPS claim until the device A/B is run.
 
 **Deferred-post metadata arena (built, not device-A/B verified):** `post_op` metadata previously used one `calloc` while recording and one `free` on GPU completion for every deferred buffer/view/query/guest write. Recording and FIFO retirement already share `queue_lock`, so the backend now grows a 64-entry chunked freelist only to the peak in-flight count and reuses entries across the eight async slots; resources still retire at the same real fence and chunks are released at async shutdown. The ARM64 game-host/APK build completed successfully. No FPS claim is made before a matched device run.
 
 **Async copy page filter widening (built, not device-A/B verified):** the saved frame-1080 diagnostics report 9,305.67 known-copy checks/frame but 9,304.67 original FIFO-chain scans/frame while 11 publications/frame carry 2.3384 MiB. The conservative page Bloom filters now use 8,192 bits instead of 512 and represent each range through 8 MiB instead of 512 KiB. A negative result still only rejects an impossible overlap; every possible hit, overflow, or larger range retains the exact original FIFO scan and publication rules. The ARM64 game-host/APK build completed successfully. No FPS claim is made before a matched device run.
+
+**ADPF 线程组修正（未发布、已完成 WSL 构建、未真机 A/B）：** `performance_hint.c` 不再把 acquire 与 present/WSI 的跨线程关系判为无效；每个有效周期把 acquire/录制线程 ID 作为一个 session 线程组，并在 `APerformanceHint_setThreads` 可用时更新。线程组变化、目标时长变化或上报失败会关闭并按有界 60→3600 周期退避重建，保留普通调度回退。WSL Ubuntu 已成功构建通用 ARM64 APK，v3 签名验证通过；设备测量仍未执行，不宣称 FPS 收益。
 
 
 

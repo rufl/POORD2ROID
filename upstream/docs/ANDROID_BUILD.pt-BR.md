@@ -11,7 +11,7 @@ No Linux x86_64 ou WSL2:
 
 ```bash
 python3 dm/android/tools/bootstrap.py
-python3 dm/android/tools/build.py --game-run --version v0.6.97
+python3 dm/android/tools/build.py --game-run --version v0.7.1
 python3 dm/android/tools/ci_checks.py
 ```
 
@@ -23,9 +23,11 @@ adb -s DEVICE install -r dm/android/build/D2R-Android-port.apk
 
 Atualizações exigem a mesma assinatura. Não desinstale antes de preservar os saves privados do aplicativo.
 
+O build publicado atual é a [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1), commit `4f0933a`, com `versionName=0.7.1-android-port`, `versionCode=701` e SHA-256 `fdc82bd5a33e9f081bf04c4cb8073358a50b9ebec5f48b85c0227323730c6312`. O build ARM64 passou; a medição A/B em aparelho continua pendente. Consulte o [changelog](../../CHANGELOG.md).
+
 ## Drivers
 
-O APK inclui System Vulkan, MaliSX2 0.5.0, PanVK r10 e Turnip T30. As recomendações completas por GPU estão em [ANDROID_GPU_DRIVER.pt-BR.md](ANDROID_GPU_DRIVER.pt-BR.md). Turnip é exclusivo para Qualcomm Adreno; em Mali use MaliSX2, PanVK ou System Vulkan conforme a matriz.
+O APK inclui System Vulkan, MaliSX2 0.5.1, PanVK r10 e Turnip T30. As recomendações completas por GPU estão em [ANDROID_GPU_DRIVER.pt-BR.md](ANDROID_GPU_DRIVER.pt-BR.md). Turnip é exclusivo para Qualcomm Adreno; em Mali use MaliSX2, PanVK ou System Vulkan conforme a matriz.
 
 ## Verificação
 
@@ -42,8 +44,8 @@ A disponibilidade no launcher não prova compatibilidade. Confirme o log `[vulka
 O workflow publica automaticamente uma Release quando uma tag `v*` é enviada:
 
 ```bash
-git tag -a v0.6.97 -m "D2R Android v0.6.97"
-git push origin v0.6.97
+VERSION=vX.Y.Z
+git tag -a "$VERSION" -m "D2R Android $VERSION" && git push origin "$VERSION"
 ```
 
 A Release deve conter o APK genérico e o kit de empacotamento. Nunca publique jogo, keys, saves ou pacote de dados do usuário.

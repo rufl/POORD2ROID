@@ -1,6 +1,6 @@
 # Android build and deployment
 
-This page summarizes the Android build from a Linux x86_64 environment. On Windows, use WSL2. Portuguese (Brasil): [`ANDROID_BUILD.pt-BR.md`](ANDROID_BUILD.pt-BR.md). Driver matrix: [`ANDROID_GPU_DRIVER.md`](ANDROID_GPU_DRIVER.md) or [`ANDROID_GPU_DRIVER.pt-BR.md`](ANDROID_GPU_DRIVER.pt-BR.md).
+This page summarizes the Android build from a Linux x86_64 environment. On Windows, use WSL2. Portuguese (Brasil): [`ANDROID_BUILD.pt-BR.md`](ANDROID_BUILD.pt-BR.md). Driver matrix: [`ANDROID_GPU_DRIVER.md`](ANDROID_GPU_DRIVER.md) or [`ANDROID_GPU_DRIVER.pt-BR.md`](ANDROID_GPU_DRIVER.pt-BR.md). Release history: [`CHANGELOG.md`](../../CHANGELOG.md).
 
 ## Build types and game data
 
@@ -16,13 +16,17 @@ Prepare the user's RomFS and rewritten `main`, `sdk`, and `subsdk0` modules, plu
 
 ```bash
 python3 dm/android/tools/bootstrap.py
-python3 dm/android/tools/build.py --game-run \
+python3 dm/android/tools/build.py --game-run --version v0.7.2 \
   --game-source /path/to/prepared/game \
   --shader-cache /path/to/prepared/shaders/spirv
 python3 dm/android/tools/ci_checks.py
 ```
 
 The output is `dm/android/build/D2R-Android-port.apk`. Install it using `adb -s DEVICE install -r`. APK updates require the same signing identity as the installed build; otherwise Android rejects the update. Back up app-private saves before uninstalling an app to change signing identity.
+
+### Current published build
+
+[v0.7.2](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2) is the current published build. Its APK reports `versionName=0.7.2-android-port` and `versionCode=702`; SHA-256 is `7ed7453adbf6bf03b0920c201991171ff45b0ec4555d7e381deb740c1cfe8758`. The ARM64 build and v3 signing verification passed, but no Android device was attached for a matched performance A/B.
 
 ## Android behavior and limits
 
@@ -53,7 +57,7 @@ APK `0.6.94` removes the runtime `OptionsPanelMessage:SetLowVisionMode` request:
 
 APK `0.6.109` synchronizes Android's device-level controller IDs into the native input queue. A controller that exposes real axes is still filtered separately from Xiaomi's axisless `uinput-xiaomi`, but its key and motion events can now be recognized by device ID when Bluetooth firmware supplies an incomplete or incorrect event source mask. The normal Android mappings remain unchanged: left stick X/Y, right stick Z/RZ with RX/RY fallback, HAT D-pad, trigger axes, and standard `KEYCODE_BUTTON_*` buttons. This targets the GameSir G8 Plus without requiring the GameSir mapping app. The 14 portable checks, Java/native APK compilation, signing, and embedded-overlay audit pass; physical G8 Plus input still requires device validation.
 
-The launcher exposes System Vulkan and hardware-gated MaliSX2, JimVulkan PanVK, and Turnip. MaliSX2 and PanVK require Mali/kbase; Turnip requires Qualcomm KGSL. The Mali path has no phone-model allowlist: any Mali device exposing `/dev/mali0` is capability-probed, and the native log classifies known Mali-G31/G51/G52/G71/G72/G76 Bifrost and G57/G68/G77/G78/G78AE/G310/G510/G610/G710/G615/G715 Valhall names. The bundled MaliSX2 0.5.0 and PanVK r10 remain experimental; driver availability does not prove that a driver can present or run D2R. Custom selection is strict; explicitly select System Vulkan to recover. See [`ANDROID_GPU_DRIVER.zh-CN.md`](ANDROID_GPU_DRIVER.zh-CN.md) and the root [`THIRD-PARTY-NOTICES.md`](../../THIRD-PARTY-NOTICES.md).
+The launcher exposes System Vulkan and hardware-gated MaliSX2, JimVulkan PanVK, and Turnip. MaliSX2 and PanVK require Mali/kbase; Turnip requires Qualcomm KGSL. The Mali path has no phone-model allowlist: any Mali device exposing `/dev/mali0` is capability-probed, and the native log classifies known Mali-G31/G51/G52/G71/G72/G76 Bifrost and G57/G68/G77/G78/G78AE/G310/G510/G610/G710/G615/G715 Valhall names. The bundled MaliSX2 0.5.1 and PanVK r10 remain experimental; driver availability does not prove that a driver can present or run D2R. Custom selection is strict; explicitly select System Vulkan to recover. See [`ANDROID_GPU_DRIVER.zh-CN.md`](ANDROID_GPU_DRIVER.zh-CN.md) and the root [`THIRD-PARTY-NOTICES.md`](../../THIRD-PARTY-NOTICES.md).
 
 Optional GPU BC texture decoding can be enabled with `bc_decode_gpu 1` in app-private `files/temp/perf.conf`; default `0` uses CPU decoding. BC6H/BC7 and unsupported texture shapes remain on CPU, and setup failures fall back. This option can lose performance when GPU-bound; compare sustained frame times on the target device.
 

@@ -2,16 +2,18 @@
 
 Runs the **original ARM64 build of Diablo II: Resurrected** natively on Android (NVN → Vulkan rendering, AAudio sound, touch and gamepad input); the repository holds only the host/port code and tools, and **no game content**.
 
-Português (Brasil): [README.pt-BR.md](README.pt-BR.md) · 中文：[README.zh-CN.md](README.zh-CN.md) · [Mali driver matrix](docs/ANDROID_GPU_DRIVER.md)
+Português (Brasil): [README.pt-BR.md](README.pt-BR.md) · 中文：[README.zh-CN.md](README.zh-CN.md) · [Changelog](../CHANGELOG.md) · [Mali driver matrix](docs/ANDROID_GPU_DRIVER.md)
 
 ## Quick start
 
 **Option 1: download the built artifacts (recommended)**
 
-From [Releases](https://github.com/rufl/POORD2ROID/releases) (CI publishes one whenever a `v*` tag is pushed):
+From [Releases](https://github.com/rufl/POORD2ROID/releases). The current manually published release is [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1); CI-created tag releases may additionally carry the package kit:
 
-1. `D2R-Android-port.apk` — the phone app. It contains **no game data**; the data comes from the package below.
-2. `d2r-package-kit-<version>.zip` — the kit for your PC: the source (the packing tools live in it) + the `d2r-package` skill + that APK + a one-page readme.
+1. `D2R-Android-port-v0.7.1-4f0933a.apk` — the current phone app. It contains **no game data**; the data comes from the package below.
+2. `d2r-package-kit-<version>.zip` — when attached, the kit for your PC: the source (the packing tools live in it) + the `d2r-package` skill + that APK + a one-page readme. Otherwise use this source tree and the same skill.
+
+The v0.7.1 APK reports `0.7.1-android-port` / version code `701`; its SHA-256 is `fdc82bd5a33e9f081bf04c4cb8073358a50b9ebec5f48b85c0227323730c6312`. See the [changelog](../CHANGELOG.md). The build passed; device A/B validation remains outstanding.
 
 Then:
 
@@ -47,8 +49,9 @@ Captured on the device (OPPO OPD2409 / Adreno 830). The block in the top-left co
 
 ![Camp](docs/images/camp.jpg)
 
-## Progress (2026-10-17)
+## Progress (2026-11-20)
 
+- **Current release:** [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1), commit `4f0933a`, reuses deferred Vulkan metadata in 64-entry chunks and expands conservative async-copy page filters from 512 to 8,192 bits. Exact FIFO scans remain authoritative. The ARM64 build passed; no connected-device A/B or measured FPS claim is available.
 - The game's ARM64 code runs on an Android host with NVN → Vulkan; AAudio sound, system-keyboard name entry, virtual stick and buttons, **gamepad support (D-pad and ZL/ZR included)** and an FPS/CPU/GPU overlay (off by default, switchable from the in-game menu).
 - **Launcher**: fullscreen landscape UI with a responsive side panel; data-package import, display profile, output resolution and save import/export.
 - **In-game menu** (on the system back key, modelled on Eden): frame rate display, on-screen controls, quality (four internal 3D resolution steps, effective immediately), export save, import save, exit. An accidental edge swipe no longer quits the run.
@@ -69,12 +72,12 @@ Captured on the device (OPPO OPD2409 / Adreno 830). The block in the top-left co
 
 - **Upstream**: [jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) at `2eb5758771f110cd53082b999d88d242766610da`; its [MIT license](LICENSE) and third-party notices are retained.
 - **Optimization references**: Eden (a Switch emulator; its rendering and upscaling ideas are referenced, but its shader translation is GPL-3.0 and is **not** merged into this MIT project) and LASRecomp.
-- **Bundled graphics drivers**: Turnip for Qualcomm KGSL, JimVulkan PanVK r10, and [MaliSX2 0.5.0](https://github.com/bmdhacks/malisx2/releases/tag/v0.5.0) for Mali kbase, plus the phone's System Vulkan. The Mali launcher path has no phone-model allowlist and classifies known Bifrost/Valhall names for diagnostics; both custom Mali drivers remain experimental. MaliSX2 is MIT-licensed and pinned by archive/library SHA-256.
+- **Bundled graphics drivers**: Turnip for Qualcomm KGSL, JimVulkan PanVK r10, and [MaliSX2 0.5.1](https://github.com/bmdhacks/malisx2/releases/tag/v0.5.1) for Mali kbase, plus the phone's System Vulkan. The Mali launcher path has no phone-model allowlist and classifies known Bifrost/Valhall names for diagnostics; both custom Mali drivers remain experimental. MaliSX2 is MIT-licensed and pinned by archive/library SHA-256.
 - **Build dependencies**: Android NDK r28c, JDK 17, Android SDK build-tools / platform 35 (pinned by `bootstrap.py`).
 - **Packing game data additionally needs** (on the player's PC only): a Python venv (`lz4`, `capstone`, ...), `hactool`, and the .NET 10 SDK; the skill's prerequisites table lists them.
 
 **This repository does not contain** game executables, RomFS, keys, saves, translated game shaders or APKs. The game modules and the data package are produced locally from **your own** files and are never distributed here or in a release.
 
-The APK includes selectable System Vulkan, Turnip, PanVK and MaliSX2 drivers where the device supports them. MaliSX2 is pinned to upstream 0.5.0 with archive and library SHA-256 verification; its MIT license and notice are included. It has no blanket D2R/Xiaomi 11T gameplay guarantee and upstream says MSAA is not implemented. `--no-malisx2` excludes it. See the [English driver matrix](docs/ANDROID_GPU_DRIVER.md) or [Portuguese matrix](docs/ANDROID_GPU_DRIVER.pt-BR.md).
+The APK includes selectable System Vulkan, Turnip, PanVK and MaliSX2 drivers where the device supports them. MaliSX2 is pinned to upstream 0.5.1 with archive and library SHA-256 verification; its MIT license and notice are included. It has no blanket D2R/Xiaomi 11T gameplay guarantee and upstream says MSAA is not implemented. `--no-malisx2` excludes it. See the [English driver matrix](docs/ANDROID_GPU_DRIVER.md) or [Portuguese matrix](docs/ANDROID_GPU_DRIVER.pt-BR.md).
 
 CI (GitHub Actions) builds the APK and the kit described above; see [the build notes](docs/ANDROID_BUILD.md).

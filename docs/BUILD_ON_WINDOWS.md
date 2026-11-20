@@ -1,6 +1,6 @@
 # Build on Windows with WSL
 
-The Android build uses Linux tools. On Windows, build inside WSL2 (Ubuntu or another supported Linux distribution) rather than using the obsolete native-Windows wrapper described in earlier revisions. Driver matrix: [`ANDROID_GPU_DRIVER.md`](ANDROID_GPU_DRIVER.md) · [`ANDROID_GPU_DRIVER.pt-BR.md`](ANDROID_GPU_DRIVER.pt-BR.md).
+The Android build uses Linux tools. On Windows, build inside WSL2 (Ubuntu or another supported Linux distribution) rather than using the obsolete native-Windows wrapper described in earlier revisions. Current release: [v0.7.2](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2) · [Changelog](../CHANGELOG.md) · Driver matrix: [`ANDROID_GPU_DRIVER.md`](ANDROID_GPU_DRIVER.md) · [`ANDROID_GPU_DRIVER.pt-BR.md`](ANDROID_GPU_DRIVER.pt-BR.md).
 
 ## Prerequisites
 
@@ -16,6 +16,8 @@ From the WSL shell, clone this repository into a WSL-accessible path (recommende
 The Android build script is `upstream/dm/android/tools/build.py`. A game-enabled build requires locally prepared game sources and shader data; a generic launcher APK does not contain game assets. Keep any personal game data, keys, and generated protected content outside version control.
 
 Build output is under `upstream/dm/android/build/`. The signing key determines whether Android accepts an APK as an in-place update: use the same signing identity as the installed app or uninstall the old app first (uninstalling can remove app-private data, so back it up).
+
+The current release APK reports `versionName=0.7.2-android-port` and `versionCode=702`; SHA-256 is `7ed7453adbf6bf03b0920c201991171ff45b0ec4555d7e381deb740c1cfe8758`. Build with `--version v0.7.2` to reproduce that manifest identity. Compilation and v3 signing verification passed; device A/B validation remains outstanding.
 
 ## Device diagnostics
 

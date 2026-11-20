@@ -1,10 +1,15 @@
 # Android 移植进度
 
-更新日期：2026-11-01。此文件随工作更新，是中断后继续移植的入口。
+更新日期：2026-11-20。此文件随工作更新，是中断后继续移植的入口。
 
 English: [ANDROID_PORT_PROGRESS.md](ANDROID_PORT_PROGRESS.md)
 
 ## 当前状态（继续开发先看这里）
+
+**2026-11-20 发布 v0.7.1，真机 A/B 待补：** 提交 `4f0933a` 将延迟 `post_op` 元数据从逐项分配/释放改为 `queue_lock` 串行保护的64项分块复用，并把保守异步复制页 Bloom 过滤器从512位扩大到8192位、单段可表示上限从512 KiB扩大到8 MiB。改动前保存的 frame1080 日志为每帧9305.67次检查、9304.67次精确 FIFO 链扫描。可能命中、溢出与大于8 MiB的范围仍走原精确扫描；真实 fence、资源退役和客体内存 FIFO 公布语义不变。ARM64 APK 已成功构建并发布到 [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1)：`versionName=0.7.1-android-port`、`versionCode=701`、SHA-256 `fdc82bd5a33e9f081bf04c4cb8073358a50b9ebec5f48b85c0227323730c6312`。本轮没有连接 Android 设备，不宣称 FPS 实测收益。
+
+**未发布后续改动：** `performance_hint.c` 现在把 acquire/录制线程作为同一个 ADPF session 线程组；API 存在时通过 `APerformanceHint_setThreads` 更新线程组，线程绑定或目标时长变化后重建 session，并在创建或上报失败后使用有界退避重试。内置 MaliSX2 已固定为 `0.5.1+308fe121c7`，ZIP SHA-256 为 `9619ec33ebd9cb8714026f5668e1f4669b5d43a17c1fbb216819ca78eb3d61c5`，库 SHA-256 为 `116cef04107dbf5490a154f8647e4e1ed60df0cacc92b006e89a4b9ba7533419`。Display 页签回归套件 3/3 通过。WSL Ubuntu 已成功构建通用 ARM64 APK，v3 签名验证通过；没有连接 Android 设备，因此真机 A/B 和设备上的 Display 页签可见性仍待验证。
+
 
 **2026-11-01 最新性能日志与修正（待 11T 真机复验）：** frame 900 的选角/菜单日志为 7.40 FPS，GPU batch span 120.56 ms/frame、guest-completion wait 79.53 ms/frame；这不是战斗实测。依赖明细指向 compute shader `16479cc6d75c2b28` 读 64 B SSBO 中的 NVN timestamp，且每帧 4 次 CPU fallback。根因是驱动可提供的 64-bit timestamp 被本机转换器过严的结果位宽门槛拒绝，之后为保持 guest 内存顺序而同步等待。已移除错误拒绝：现用 shader 的 3×32-bit limbs 精确计算不超过 90-bit 的中间积，并按 NVN 的 uint64 输出取模；新增 64-bit/76.923 ns 参数及 Vulkan timestamp 发布回归。另将逐 compute dispatch 跟踪默认关闭，仍可用 `DM_VK_TRACE_DISPATCH=1` 或 `perf.conf` 显式开启。**本机 Arc Vulkan harness 对生产 shader 的四组 64-bit/掩码输入与 Python 大整数精确参考全通过，SPIR-V 校验与可移植检查也通过；但当前机器没有 Android NDK/JDK 或 ADB，Android Vulkan fixture、APK 构建及 Xiaomi 11T A/B 均未执行。120.56 ms GPU span 仍远高于 30 FPS 的 33.3 ms 帧预算，因此未确认这项改动能把设备提升至 30 FPS。**
 
@@ -25,8 +30,8 @@ English: [ANDROID_PORT_PROGRESS.md](ANDROID_PORT_PROGRESS.md)
 
 ### 源码和功能
 
-- 私有仓库：[sydeEvans/d2r-android](https://github.com/sydeEvans/d2r-android)。保留上游许可与来源说明，不包含游戏资源、密钥或 APK。
-- 最新已构建和安装的提交：本轮提交 `Fix the three reported issues and make the resolution selectable`（三个报告问题修复 + 分辨率可选，提交号见 `git log` 最近一条），分支 `main`；设备上的 APK 确实是这一版源码构建的（核对过：`dm/` 下没有比 APK 更新的源文件）。此前提交 `fa758de`（启动界面导入数据包并加载）、`0a1c0c1`（记录导入轮与四个根因）。更早基线 `891f596172042a7d2db702e66fb425ca0b6d6102`（`Reduce Android Vulkan frame-time overhead`）；本轮之前同批落地：`e392a90` 启动界面、`6461a5d` 浮层显示电池功耗、`d99f46a` 上下文入口测试改为当前契约、`c2298ca` 数据包格式与汇编器、`7b8bf06` 打包 CLI 与 skill、`13f7e7d` 启动画面随源码发布。
+- 公开仓库：[rufl/POORD2ROID](https://github.com/rufl/POORD2ROID)。保留上游许可与来源说明；源码不含游戏资源或密钥，Release APK 只含移植/启动器，不含游戏数据。
+- 2026-10-17 历史装机检查点：当时构建和安装的是 `Fix the three reported issues and make the resolution selectable` 这一轮 `main` 源码，且核对过设备 APK 与源码一致。此前为 `fa758de`（启动界面导入数据包并加载）、`0a1c0c1`（记录导入轮与四个根因），更早基线为 `891f596172042a7d2db702e66fb425ca0b6d6102`（`Reduce Android Vulkan frame-time overhead`）。当前公开源码与制品以本文顶部 v0.7.1 条目为准。
 - 本轮新增（已真机验证）：数据包导入（`docs/ANDROID_PACKAGE.zh-CN.md` 是格式契约）。电脑端 `make_package.py` 从玩家自己的游戏文件与密钥解包/改写/翻译，产出一个 zip；手机端启动界面选它、解包、再启动游戏。**三个必须记住的约束**：① 模块解到**内部**目录 —— 外部存储是 `noexec` 挂载，从那里 `dlopen` 会失败（实测 `/storage/emulated` 带 `noexec`）；大资源仍在外部目录。② 包里的 RomFS 必须**整个 `data/` 目录**都打进去、不按扩展名筛选 —— 曾经漏掉隐藏文件 `.build.config` 与 `build_key.txt`，游戏报 "TACT Failed to load build config" 后直接返回 `nnMain`，症状像"游戏无故退出"；`ls` 不带 `-a` 对比还会显示"文件完全一致"。③ 分组档位文件 `host-subgroup-size.txt` 必须**随包发布**，运行时在加载驱动前会读它，缺了直接中止启动。
 - 启动界面（`LauncherActivity`）：已导入才允许启动（未导入时入口置灰）、导入时显示百分比、导入是原子的（旧 `manifest.json` 先删、新的最后写，中途失败不会让游戏读到半个包）。调试浮层开关、画面档位与**分辨率**写进 `files/temp/launch-settings.conf`，由 native 严格解析（键白名单、失败即中止启动、不接受任意路径）。分辨率只给三档预设（跟随档位 / 1920×1080 / 2560×1440），空值表示"跟随档位"、不写这个键；真机步骤验证：点一下 → `分辨率：1920×1080` → 再点 → `2560×1440` → 点启动 → 配置写出 `resolution=2560x1440` → native 读到 `DM_GAME_RES=2560x1440`。**注意改动界面标签的函数绝不重新读盘**（点完又读盘会把刚改的内存值覆盖回去，症状是"点了没反应"，两行都曾如此）。
 - 方向键与扳机（用户报告）：**同一类问题有两个**。① 十字键：Xbox 手柄在安卓上把它报成 `AXIS_HAT_X/Y` 而不是 `DPAD_*` 键码，而原生输入只读摇杆轴、**完全不读 HAT 轴**（改动前全仓 `grep AXIS_HAT` 零命中），于是一整块被静默丢弃。现在按 ±0.5 阈值映射成 `DM_BTN_LEFT/RIGHT/UP/DOWN`（`dm_input.h` 的 `dm_pad_hat_buttons`），并用**独立的 `hat_buttons` 位掩码**，免得 HAT 归零时把同时按住的 `DPAD_*` 键码一起清掉；源判断也放宽到 `JOYSTICK|GAMEPAD`，纯 GAMEPAD 源的方向键不会再掉进触摸分支被当成手指坐标。② 扳机 ZL/ZR：同样报成**模拟轴**（`AXIS_LTRIGGER`/`AXIS_RTRIGGER`，0–1，本机 flat=0.062）而不是 L2/R2 键码，键码分支永远收不到；现在读这两个轴（`AXIS_BRAKE`/`AXIS_GAS` 别名作兜底），阈值 0.5，同样用自己的位掩码（`dm_pad_trigger_buttons`）。三条输入路径（HAT 轴 / 扳机轴 / 按键码）现在**都在变化时各记一行** `[android-pad]`，出问题时不用靠猜。

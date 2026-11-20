@@ -21,4 +21,4 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 MaliSX2 includes Mesa-derived vendor components; see upstream source and vendor license inventory:
-https://github.com/bmdhacks/malisx2/tree/v0.4.0
+https://github.com/bmdhacks/malisx2/tree/v0.5.1

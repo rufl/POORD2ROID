@@ -2,16 +2,18 @@
 
 把《暗黑破坏神 II：重制版》的**原版 ARM64 程序**直接跑在 Android 上的移植项目（NVN → Vulkan 渲染、AAudio 声音、触控与手柄），仓库只含宿主/移植代码与工具，**不含任何游戏内容**。
 
-English: [README.md](README.md)
+English: [README.md](README.md) · Português (Brasil): [README.pt-BR.md](README.pt-BR.md) · [更新日志](../CHANGELOG.md)
 
 ## 快速开始
 
 **方式一：下载现成制品（推荐）**
 
-在 [Releases](https://github.com/sydeEvans/d2r-android/releases) 下载两个文件（维护者推 `v*` tag 时由 CI 自动生成）：
+在 [Releases](https://github.com/rufl/POORD2ROID/releases) 下载制品。当前手工发布的是 [v0.7.2](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2)；由 CI 建立的 tag 版本还可能附带电脑端打包套件：
 
-1. `D2R-Android-port.apk` —— 手机端应用。**不含游戏数据**，数据靠下面的包导入。
-2. `d2r-package-kit-<版本>.zip` —— 电脑端打包套件：源码（打包工具在里面）+ `d2r-package` 技能 + 上面那个 APK + 一页说明。
+1. `D2R-Android-port-v0.7.2.apk` —— 当前手机端应用。**不含游戏数据**，数据靠下面的包导入。
+2. `d2r-package-kit-<版本>.zip` —— Release 附带时使用的电脑端打包套件：源码（打包工具在里面）+ `d2r-package` 技能 + 上面那个 APK + 一页说明。未附带时使用本源码树与相同技能。
+
+v0.7.2 APK 的 `versionName` 为 `0.7.2-android-port`、`versionCode` 为 `702`，SHA-256 为 `7ed7453adbf6bf03b0920c201991171ff45b0ec4555d7e381deb740c1cfe8758`；详见[更新日志](../CHANGELOG.md)。构建已通过，但没有连接 Android 设备做匹配 A/B。
 
 然后：
 
@@ -47,8 +49,9 @@ python3 dm/android/tools/ci_checks.py          # 可选：跑与仓库 CI 相同
 
 ![营地](docs/images/camp.jpg)
 
-## 项目进展（2026-10-17）
+## 项目进展（2026-11-20）
 
+- **当前版本：** [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1)，提交 `4f0933a`。延迟 Vulkan 元数据改为64项分块复用，保守异步复制页过滤器由512位扩大到8192位；可能命中时仍走精确 FIFO 扫描。ARM64 构建通过，尚无连接设备的 A/B 或实测 FPS 收益结论。
 - 游戏本体的 ARM64 程序运行在 Android 宿主上，图形走 NVN → Vulkan；已具备 AAudio 声音、系统键盘命名、虚拟摇杆与按键、**手柄输入（含十字键与 ZL/ZR）**、FPS/CPU/GPU 调试浮层（默认关闭，可用游戏内菜单开）。
 - **启动界面**：全屏横屏与自适应侧边面板；数据包导入、画面档位、输出分辨率、存档导入/导出。
 - **游戏内菜单**（返回键呼出，照 Eden 的做法）：帧率显示、虚拟摇杆、画质（3D 内部分辨率四档，立即生效）、导出存档、导入存档、退出。放在屏幕边缘误滑不会再直接退出整局。
@@ -69,12 +72,12 @@ python3 dm/android/tools/ci_checks.py          # 可选：跑与仓库 CI 相同
 
 - **上游**：[jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)（基线 `2eb5758771f110cd53082b999d88d242766610da`）。保留其 [MIT 许可](LICENSE) 及第三方许可声明。
 - **优化参考**：Eden（Switch 模拟器，参考其渲染与超分做法；其着色器翻译是 GPL-3.0，**不并入**本 MIT 项目）与 LASRecomp。
-- **随包分发的图形驱动**：Turnip（Qualcomm KGSL）、JimVulkan PanVK r10 和 [MaliSX2 0.5.0](https://github.com/bmdhacks/malisx2/releases/tag/v0.5.0)（Mali kbase），以及手机自带的 System Vulkan。Mali 启动路径没有手机型号白名单，native 日志会把已知 Bifrost/Valhall 名称归类供诊断；两个自定义 Mali 驱动仍是实验性方案。MaliSX2 使用固定版本并校验压缩包和驱动库 SHA-256，附带 MIT 许可证。
+- **随包分发的图形驱动**：Turnip（Qualcomm KGSL）、JimVulkan PanVK r10 和 [MaliSX2 0.5.1](https://github.com/bmdhacks/malisx2/releases/tag/v0.5.1)（Mali kbase），以及手机自带的 System Vulkan。Mali 启动路径没有手机型号白名单，native 日志会把已知 Bifrost/Valhall 名称归类供诊断；两个自定义 Mali 驱动仍是实验性方案。MaliSX2 使用固定版本并校验压缩包和驱动库 SHA-256，附带 MIT 许可证。
 - **构建依赖**：Android NDK r28c、JDK 17、Android SDK build-tools / platform 35（`bootstrap.py` 自动安装的版本为准）。
 - **打包游戏数据另需**（只在玩家电脑上）：Python venv（`lz4` / `capstone` 等）、`hactool`、.NET 10 SDK；技能里的前置条件表逐项列出了它们。
 
 **本仓库不包含**游戏程序、RomFS、密钥、存档、翻译后的游戏着色器或 APK。真实 APK 里的游戏模块与数据包都由玩家用**自己的**文件在本机生成，不随仓库或 Release 分发。
 
-APK 可按设备选择 System Vulkan、Turnip、PanVK 或 MaliSX2；MaliSX2 默认随包，使用固定 v0.5.0 并校验 ZIP 与库的 SHA-256，附带 MIT 许可和声明。它不保证 D2R/Xiaomi 11T 实战兼容，上游说明尚未实现 MSAA。可用 `--no-malisx2` 构建不含该驱动的 APK。详见[驱动说明](docs/ANDROID_GPU_DRIVER.zh-CN.md)。
+APK 可按设备选择 System Vulkan、Turnip、PanVK 或 MaliSX2；MaliSX2 默认随包，使用固定 v0.5.1 并校验 ZIP 与库的 SHA-256，附带 MIT 许可和声明。它不保证 D2R/Xiaomi 11T 实战兼容，上游说明尚未实现 MSAA。可用 `--no-malisx2` 构建不含该驱动的 APK。详见[驱动说明](docs/ANDROID_GPU_DRIVER.zh-CN.md)。
 
 CI（GitHub Actions）构建上面那个 APK 与套件，见[构建说明](docs/ANDROID_BUILD.zh-CN.md#自动流水线github-actions)。

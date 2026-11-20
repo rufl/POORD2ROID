@@ -7,8 +7,8 @@
 extern "C" {
 #endif
 
-// acquire 等待后开始、真实 present 后结束；仅同窗口/贴图/线程的完整周期可报告。
-// Begin after acquire waits, end after real present; report only a complete same-window/image/thread cycle.
+// acquire 等待后开始、真实 present 后结束；完整周期把客体与录制线程作为同一个 ADPF 工作组报告。
+// Begin after acquire waits and end after real present; report the guest and recording threads as one ADPF work group.
 void dm_android_performance_frame_begin(const void *window,int index);
 void dm_android_performance_frame_end(const void *window,int index);
 // 扣除 Vulkan acquire/present 整个调用墙钟（含少量驱动CPU），不扣真实GPU依赖等待。

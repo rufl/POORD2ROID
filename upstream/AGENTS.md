@@ -2,6 +2,12 @@
 
 These notes persist the user's engineering expectations and the current Xiaomi 11T HUD incident across Paseo sessions. Read before continuing Android UI, rendering, packaging, or device-test work.
 
+## Current published release (2026-11-20)
+
+- [v0.7.1](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1), commit `4f0933a`, is the current public release. APK metadata is `0.7.1-android-port` / versionCode 701; SHA-256 is `fdc82bd5a33e9f081bf04c4cb8073358a50b9ebec5f48b85c0227323730c6312`.
+- It adds a 64-entry chunked freelist for deferred Vulkan `post_op` metadata and widens conservative async-copy page Bloom filters from 512 to 8,192 bits (512 KiB to 8 MiB per represented range). Exact FIFO scans and fence/publication semantics remain authoritative.
+- The ARM64 build passed. No Android device was attached for a matched A/B, so do not claim an FPS improvement. Canonical release history is `../CHANGELOG.md`.
+
 ## User and device
 
 - User values verified outcomes over assurances, speed, or a green checkbox. They have repeatedly had to retest broken builds and redownload large data packages; do not make them repeat avoidable work.
