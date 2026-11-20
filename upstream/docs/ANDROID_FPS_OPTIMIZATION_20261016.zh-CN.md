@@ -2,6 +2,11 @@
 
 **Xiaomi 11T 20:9 presentation A/B (experimental, default off):** set `present_bar_blit 1` in `$DM_TEMP/perf.conf` to replace the full-surface black clear with black-source blits limited to the unused letterbox regions. Unsupported source formats or image allocation failures retain the full-clear path; `present_bar_blit 0` restores the baseline. The 60-frame `[vulkan-time]` entry reports full-clear, bars-blit, and fallback counts. Compare the same scene, backend, profile, and thermal state; this change has no measured FPS claim until the device A/B is run.
 
+**Deferred-post metadata arena (built, not device-A/B verified):** `post_op` metadata previously used one `calloc` while recording and one `free` on GPU completion for every deferred buffer/view/query/guest write. Recording and FIFO retirement already share `queue_lock`, so the backend now grows a 64-entry chunked freelist only to the peak in-flight count and reuses entries across the eight async slots; resources still retire at the same real fence and chunks are released at async shutdown. The ARM64 game-host/APK build completed successfully. No FPS claim is made before a matched device run.
+
+**Async copy page filter widening (built, not device-A/B verified):** the saved frame-1080 diagnostics report 9,305.67 known-copy checks/frame but 9,304.67 original FIFO-chain scans/frame while 11 publications/frame carry 2.3384 MiB. The conservative page Bloom filters now use 8,192 bits instead of 512 and represent each range through 8 MiB instead of 512 KiB. A negative result still only rejects an impossible overlap; every possible hit, overflow, or larger range retains the exact original FIFO scan and publication rules. The ARM64 game-host/APK build completed successfully. No FPS claim is made before a matched device run.
+
+
 
 **小米 11T System Vulkan / ADPF follow-up:** the saved log showed `APerformanceHint_getManager()` succeeded, but initial session creation failed for TID 27177; subsequent cycles were permanently skipped. `performance_hint.c` now retries on valid frame cycles with exponential backoff (60, 120, 240 … capped at 3600 cycles), while keeping the same present-thread binding and normal scheduling fallback. This only recovers if the failure is transient; no FPS improvement is claimed before device verification. Packaged as v0.6.66.
 

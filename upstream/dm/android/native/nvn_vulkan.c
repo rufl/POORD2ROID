@@ -123,6 +123,30 @@ typedef struct post_op {
     VkPipelineStageFlags gpu_stage;VkAccessFlags gpu_access,gpu_synchronized[32];
     struct post_op *next,*copy_next;
 } post_op;
+enum { POST_POOL_CHUNK_CAPACITY=64 };
+typedef struct post_pool_chunk {
+    post_op entries[POST_POOL_CHUNK_CAPACITY];
+    struct post_pool_chunk *next;
+} post_pool_chunk;
+static post_pool_chunk *post_pool_chunks;
+static post_op *post_pool_free;
+// queue_lock serializes recording and completion retirement. Grow only to the peak in-flight post count,
+// then reuse entries instead of calling calloc/free for every deferred resource, query and guest write.
+static post_op *post_pool_take(void) {
+    if(!post_pool_free){
+        post_pool_chunk *chunk=malloc(sizeof *chunk);if(!chunk)die("NVN completion pool allocation");
+        chunk->next=post_pool_chunks;post_pool_chunks=chunk;
+        for(unsigned i=0;i<POST_POOL_CHUNK_CAPACITY;i++){chunk->entries[i].next=post_pool_free;post_pool_free=&chunk->entries[i];}
+    }
+    post_op *post=post_pool_free;post_pool_free=post->next;memset(post,0,sizeof *post);return post;
+}
+static void post_pool_put(post_op *post) {
+    if(!post)die("NVN completion pool release");post->next=post_pool_free;post_pool_free=post;
+}
+static void post_pool_destroy(void) {
+    while(post_pool_chunks){post_pool_chunk *next=post_pool_chunks->next;free(post_pool_chunks);post_pool_chunks=next;}
+    post_pool_free=NULL;
+}
 static int counter_gpu_record(post_op *post);
 static VkInstance instance;
 static VkPhysicalDevice physical;
@@ -783,7 +807,7 @@ int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
 }
 static post_op *post_new(int kind) {
     if (!recording) die("NVN operation outside a submission");    if(post_order==DM_PENDING_ORDER_ALL-1)die("Vulkan post order overflow");
-    post_op *p = calloc(1, sizeof *p); if (!p) die("NVN completion allocation");
+    post_op *p = post_pool_take();
     p->kind = kind;p->order=++post_order; *post_tail = p; post_tail = &p->next;
     if(kind==0){*post_copy_tail=p;post_copy_tail=&p->copy_next;}
     if(kind==1||kind==2)pending_host_sync=1;

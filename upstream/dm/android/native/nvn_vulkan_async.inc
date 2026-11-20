@@ -9,10 +9,8 @@
 #endif
 
 enum {ASYNC_FREE,ASYNC_RECORDING,ASYNC_PENDING};
-// 已知 CPU copy 的链遍历每次读只值约 0.22 µs（实测 5319 次读共 1.2 ms），不值得引入分桶索引；
-// 这里保留原链遍历，FIFO 顺序语义不变。
-// Walking the known-CPU-copy chain costs about 0.22 us per read (measured: 1.2 ms for 5319 reads), so a
-// bucketed index is not worth its risk; the original chain walk stays and the FIFO ordering is unchanged.
+// The full FIFO chain remains authoritative. A page Bloom filter rejects impossible overlaps only; ranges too
+// large to represent still force the original scan, and every possible hit retains the exact chain walk.
 // 每段至少 32 draw 且录制 2 ms，再在自然通道边界提交；每批最多八段。
 // Submit at natural pass boundaries after at least 32 draws and 2 ms of recording; cap each batch at eight chunks.
 enum {ASYNC_CHUNK_CAPACITY=DM_VK_MAX_CHUNKS};
@@ -36,6 +34,7 @@ static uint64_t async_chunk_record_ns(void) {
     }
     return (uint64_t)value;
 }
+enum { ASYNC_BLOOM_WORDS=128, ASYNC_BLOOM_BITS=ASYNC_BLOOM_WORDS*64, ASYNC_BLOOM_MAX_SIZE=8u<<20 };
 enum {ASYNC_QUERY_CAPACITY=1024,ASYNC_TIMESTAMP_BYTES=2*ASYNC_CHUNK_CAPACITY*sizeof(uint64_t),
       ASYNC_QUERY_READBACK_BYTES=ASYNC_TIMESTAMP_BYTES+ASYNC_QUERY_CAPACITY*sizeof(uint64_t)};
 typedef struct async_batch {
@@ -54,7 +53,7 @@ typedef struct async_batch {
     uintptr_t known_copy_low,known_copy_high;
     uintptr_t copy_low,copy_high;
     uintptr_t pending_low,pending_high;   // 区间索引登记范围的包围盒（保守超集）
-    uint64_t known_copy_bloom[8],copy_bloom[8],pending_bloom[8];
+    uint64_t known_copy_bloom[ASYNC_BLOOM_WORDS],copy_bloom[ASYNC_BLOOM_WORDS],pending_bloom[ASYNC_BLOOM_WORDS];
     uint32_t query_count;
     int host_sync,has_known_cpu_copy,known_copy_unbounded,known_copy_bloom_unbounded;
     int has_any_copy,copy_unbounded,copy_bloom_unbounded;
@@ -127,7 +126,7 @@ static void post0_publish_report(void) {
         stats.rw_clock_unavailable==previous.rw_clock_unavailable?"complete":"partial",(unsigned long long)(stats.rw_clock_unavailable-previous.rw_clock_unavailable),
         (unsigned long long)(stats.fallback_calls-previous.fallback_calls),(post0_fallback_calls-fallback_calls)/(double)span,(post0_fallback_bytes-fallback_bytes)/(span*1048576.));
     uint64_t checked=known_copy_filter_calls-filter_calls,negative=known_copy_filter_negative-filter_negative;
-    LOG("[vulkan-known-copy-filter] frame=%llu span=%llu calls=%.2f/frame negative=%.2f/frame original_scan=%.2f/frame negative_pct=%.2f (empty or disjoint bounds only)",
+    LOG("[vulkan-known-copy-filter] frame=%llu span=%llu calls=%.2f/frame negative=%.2f/frame original_scan=%.2f/frame negative_pct=%.2f (conservative bounds/page rejection only)",
         (unsigned long long)presents,(unsigned long long)span,checked/(double)span,negative/(double)span,(checked-negative)/(double)span,checked?negative*100.0/checked:0);
     filter_calls=known_copy_filter_calls;filter_negative=known_copy_filter_negative;
     frame=presents;calls=post0_calls;bytes=post0_bytes;fallback_calls=post0_fallback_calls;fallback_bytes=post0_fallback_bytes;previous=stats;errno=saved_errno;
@@ -140,14 +139,13 @@ static uint64_t pending_index_oracle_queries,pending_index_oracle_nodes;
 
 // 字段完成才登记；未知输出在 encoded 之前已可见，已知 CPU copy 仍保留原发布链。
 // Register only completed fields; unknown outputs are visible before encoding, while known CPU copies retain the original publication chain.
-enum { ASYNC_BLOOM_MAX_SIZE = 512u << 10 };
 static inline unsigned async_page_bit1(uint64_t page) {
-    uint64_t h = page * 0x9e3779b97f4a7c15ull; h ^= h >> 30; return (unsigned)(h & 511u);
+    uint64_t h = page * 0x9e3779b97f4a7c15ull; h ^= h >> 30; return (unsigned)(h & (ASYNC_BLOOM_BITS-1));
 }
 static inline unsigned async_page_bit2(uint64_t page) {
-    uint64_t h = page * 0xbf58476d1ce4e5b9ull; h ^= h >> 27; return (unsigned)(h & 511u);
+    uint64_t h = page * 0xbf58476d1ce4e5b9ull; h ^= h >> 27; return (unsigned)(h & (ASYNC_BLOOM_BITS-1));
 }
-static void async_bloom_mark(uint64_t bloom[8],int *unbounded,uintptr_t start,uint64_t bytes) {
+static void async_bloom_mark(uint64_t bloom[ASYNC_BLOOM_WORDS],int *unbounded,uintptr_t start,uint64_t bytes) {
     if(*unbounded||!bytes)return;
     if(bytes>ASYNC_BLOOM_MAX_SIZE||bytes>UINTPTR_MAX-start){*unbounded=1;return;}
     uint64_t first=start>>12,last=(start+bytes-1)>>12;
@@ -157,7 +155,7 @@ static void async_bloom_mark(uint64_t bloom[8],int *unbounded,uintptr_t start,ui
         bloom[b2>>6]|=1ull<<(b2&63u);
     }
 }
-static int async_bloom_may_hit(const uint64_t bloom[8],int unbounded,uintptr_t address,uint64_t size) {
+static int async_bloom_may_hit(const uint64_t bloom[ASYNC_BLOOM_WORDS],int unbounded,uintptr_t address,uint64_t size) {
     if(unbounded||size>ASYNC_BLOOM_MAX_SIZE)return 1;
     uint64_t first=address>>12,last=(address+size-1)>>12;
     for(uint64_t page=first;page<=last;page++){
@@ -468,7 +466,7 @@ static void async_publish_locked(async_batch *batch) {
             if(p->pass)vkDestroyRenderPass(device,p->pass,NULL);
             if(p->image_view)vkDestroyImageView(device,p->image_view,NULL);
         }
-        free(p);
+        post_pool_put(p);
     }
     batch->posts=batch->copies=NULL;batch->query_count=0;batch->host_sync=0;
     // 先真实发布/释放，再退役该批区间；其它在途批次的根与消费者引用保持不变。
@@ -630,6 +628,7 @@ static void async_shutdown(void) {
         immutable_buffer_bytes-=batch->query_readback.capacity;buffer_destroy(&batch->query_readback);
         dm_pending_ranges_destroy(&batch->pending_ranges);
     }
+    post_pool_destroy();
     memset(async_batches,0,sizeof async_batches);command=VK_NULL_HANDLE;gpu_fence=VK_NULL_HANDLE;draw_queries=batch_times=VK_NULL_HANDLE;
     async_initialized=async_stopping=0;async_next_slot=0;pthread_mutex_unlock(&queue_lock);
 }
