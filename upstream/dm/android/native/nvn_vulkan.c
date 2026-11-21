@@ -280,9 +280,11 @@ static void screen_create_swapchain(struct ANativeWindow *window) {
     if (dm_uiscreen_surface_size) dm_uiscreen_surface_size((int)screen_extent.width, (int)screen_extent.height);
     uint32_t images = cap.minImageCount + 1; if (cap.maxImageCount && images > cap.maxImageCount) images = cap.maxImageCount;
     VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR; if (!(cap.supportedCompositeAlpha & alpha)) alpha = cap.supportedCompositeAlpha & -cap.supportedCompositeAlpha;
-    // 最终 blit 输出是窗口坐标下的正向图像，没有预旋转；由合成器处理屏幕方向。
-    // The final blit produces an upright window-space image, not a pre-rotated image; let the compositor handle display orientation.
-    VkSurfaceTransformFlagBitsKHR transform = (cap.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : cap.currentTransform;
+    // The Android surface reports the device's natural-to-display transform in currentTransform. Supplying
+    // identity when it is supported makes the presentation engine apply that rotation a second time to this
+    // already upright window-space blit; on devices reporting ROTATE_90 this produces the sideways UI seen in
+    // v0.7.2. Use the current transform so the compositor does not add an implicit rotation.
+    VkSurfaceTransformFlagBitsKHR transform = cap.currentTransform;
     LOG("[vulkan-surface-transform] supported=%#x current=%#x selected=%#x extent=%ux%u upright_blit=1",cap.supportedTransforms,cap.currentTransform,transform,screen_extent.width,screen_extent.height);
     VkSwapchainCreateInfoKHR ci = {.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, .surface = surface, .minImageCount = images, .imageFormat = format.format, .imageColorSpace = format.colorSpace, .imageExtent = screen_extent, .imageArrayLayers = 1, .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT, .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = transform, .compositeAlpha = alpha, .presentMode = VK_PRESENT_MODE_FIFO_KHR, .clipped = VK_TRUE};
     VK_CHECK(vkCreateSwapchainKHR(device, &ci, NULL, &swapchain)); VK_CHECK(vkGetSwapchainImagesKHR(device, swapchain, &screen_count, NULL)); screen_images = calloc(screen_count, sizeof *screen_images); screen_initialized = calloc(screen_count, 1); if (!screen_images || !screen_initialized) die("Vulkan swapchain image allocation"); VK_CHECK(vkGetSwapchainImagesKHR(device, swapchain, &screen_count, screen_images));

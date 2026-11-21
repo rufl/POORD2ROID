@@ -2,6 +2,13 @@
 
 Release artifacts contain the Android port and launcher only. They do not contain game data, firmware, keys, saves, or protected game content.
 
+## [v0.7.3] — 2026-11-21
+
+### Android display orientation hotfix
+
+- Vulkan swapchains now use the Android surface `currentTransform` for `preTransform`, preventing the presentation engine from rotating an already-upright blit on devices reporting `ROTATE_90`.
+- WSL Ubuntu built the generic ARM64 APK successfully; APK metadata is `versionName=0.7.3-android-port`, `versionCode=703`, size `22,883,679` bytes, SHA-256 `a70e57f38eb3abdae9899420d4ee144cee56bf6a8e3d87b0273a05e6261c2315`. APK signing verification passed with v3. No Android device was connected for final visual confirmation.
+
 ## [v0.7.2] — 2026-11-20
 
 ### Android Vulkan follow-up
@@ -44,6 +51,7 @@ Release artifacts contain the Android port and launcher only. They do not contai
 - Fix ADPF cycles being rejected solely because acquire and present run on different threads.
 - Keep the earliest acquire timestamp within a frame.
 
+[v0.7.3]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.3
 [v0.7.2]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2
 [v0.7.1]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1
 [v0.7.0]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.0

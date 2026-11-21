@@ -8,12 +8,12 @@ English: [README.md](README.md) · Português (Brasil): [README.pt-BR.md](README
 
 **方式一：下载现成制品（推荐）**
 
-在 [Releases](https://github.com/rufl/POORD2ROID/releases) 下载制品。当前手工发布的是 [v0.7.2](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2)；由 CI 建立的 tag 版本还可能附带电脑端打包套件：
+在 [Releases](https://github.com/rufl/POORD2ROID/releases) 下载制品。当前手工发布的是 [v0.7.3](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.3)；由 CI 建立的 tag 版本还可能附带电脑端打包套件：
 
-1. `D2R-Android-port-v0.7.2.apk` —— 当前手机端应用。**不含游戏数据**，数据靠下面的包导入。
+1. `D2R-Android-port-v0.7.3.apk` —— 当前手机端应用。**不含游戏数据**，数据靠下面的包导入。
 2. `d2r-package-kit-<版本>.zip` —— Release 附带时使用的电脑端打包套件：源码（打包工具在里面）+ `d2r-package` 技能 + 上面那个 APK + 一页说明。未附带时使用本源码树与相同技能。
 
-v0.7.2 APK 的 `versionName` 为 `0.7.2-android-port`、`versionCode` 为 `702`，SHA-256 为 `7ed7453adbf6bf03b0920c201991171ff45b0ec4555d7e381deb740c1cfe8758`；详见[更新日志](../CHANGELOG.md)。构建已通过，但没有连接 Android 设备做匹配 A/B。
+v0.7.3 APK 的 `versionName` 为 `0.7.3-android-port`、`versionCode` 为 `703`，SHA-256 为 `a70e57f38eb3abdae9899420d4ee144cee56bf6a8e3d87b0273a05e6261c2315`；Vulkan 交换链现在使用 Android surface 的 `currentTransform`，修复了部分设备上的画面旋转问题。构建已通过，但最终设备画面仍需确认。
 
 然后：
 

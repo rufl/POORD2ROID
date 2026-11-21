@@ -6,14 +6,14 @@ English: [README.md](README.md) · 中文: [README.zh-CN.md](README.zh-CN.md) ·
 
 ## Download
 
-Baixe a versão atual [v0.7.2](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2) ou consulte todas as [Releases](https://github.com/rufl/POORD2ROID/releases):
+Baixe a versão atual [v0.7.3](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.3) ou consulte todas as [Releases](https://github.com/rufl/POORD2ROID/releases):
 
-1. `D2R-Android-port-v0.7.2.apk` — aplicativo Android atual.
+1. `D2R-Android-port-v0.7.3.apk` — aplicativo Android atual.
 2. `d2r-package-kit-<versão>.zip` — quando anexado, contém as ferramentas para gerar o pacote a partir dos seus próprios arquivos; caso contrário, use esta árvore de código.
 
 O APK não contém jogo. Use o kit com um agente de código para preparar os dados localmente e instalar por ADB.
 
-O APK v0.7.2 usa `versionName=0.7.2-android-port`, `versionCode=702` e SHA-256 `7ed7453adbf6bf03b0920c201991171ff45b0ec4555d7e381deb740c1cfe8758`. O build ARM64 passou; não houve dispositivo conectado para A/B e não há alegação de ganho de FPS.
+O APK v0.7.3 usa `versionName=0.7.3-android-port`, `versionCode=703` e SHA-256 `a70e57f38eb3abdae9899420d4ee144cee56bf6a8e3d87b0273a05e6261c2315`. O build ARM64 passou; a correção usa o `currentTransform` da superfície Vulkan para evitar a rotação indevida. A confirmação visual final em dispositivo ainda é necessária.
 
 ## Escolha do driver por GPU Mali
 
