@@ -2,6 +2,22 @@
 
 Release artifacts contain the Android port and launcher only. They do not contain game data, firmware, keys, saves, or protected game content.
 
+## Unreleased
+
+- Android's native experience bar now scales and centers inside the bottom HUD groove; the generated 1320px layout places its ends at 1045–1735px inside the 1033–1747px container.
+- The in-game activity uses sticky immersive mode on creation, resume, and focus restoration to hide the system gesture handle while retaining swipe-to-reveal navigation. The launcher keeps its existing behavior.
+- Bundled MaliSX2 was updated from 0.5.1 to 0.6.0 (`62d6d62423`); packaging verifies the upstream ZIP and `libvulkan_malisx2.so` SHA-256 values. PanVK r10 remains the latest JimVulkan release.
+
+
+
+## [v0.7.6] — 2026-11-22
+
+### Android driver update
+
+- Bundled MaliSX2 updated from 0.5.1 to 0.6.0 (`62d6d62423`); packaging verifies the upstream ZIP SHA-256 `55b17293a6e3ab089e2d255cc6741f574def4c241265547d4a5aaa01cb4047f8` and library SHA-256 `c1c8738fabd6a3b5a8c2d3d0a732b1498a0569251d22cf7f05cd50c81db176fb`.
+- Kept the complete `--game-run` package-only APK, Java launcher/game activity, normal/large touch-layout migration profiles, ADPF changes, PanVK r10, Turnip T30, Display routing, and recent native performance work.
+- APK metadata is `versionName=0.7.6-android-port`, `versionCode=706`, size `43,020,844` bytes, SHA-256 `9e7a3be222a301da82364f456290afe68955a8593539b1e16799bcf3a955e7ea`. APK signing verification passed with v3. No Android device was connected for final visual confirmation.
+
 ## [v0.7.5] — 2026-11-22
 
 ### Android surface orientation correction

@@ -76,7 +76,7 @@ RomFS和着色器仅首次或资源版本变化时部署；更新APK保留应用
 `make_package.py` 现在保留游戏原始的 Console/Handheld 字体档，不再默认把游戏字体放大 1.5 倍。重新导入新数据包会移除旧包中的 1.5× 字体 overlay；只更新 APK 不会改动已导入资源。
 若要覆盖更新已有安装，必须沿用相同签名密钥；默认使用 `$DM_ANDROID_TOOLS/debug.keystore`。密钥不同时 Android 会拒绝更新，可用 `--keystore PATH` 指定已有密钥。
 
-启动器提供 System Vulkan、JimVulkan PanVK r10、MaliSX2 0.5.1（Mali kbase，`/dev/mali0`）以及 Qualcomm KGSL（`/dev/kgsl-3d0`）专用的内置 Turnip。Mali 路径没有手机型号白名单：只要设备暴露 `/dev/mali0` 就会进行能力探测，native 日志会把已知的 Mali-G31/G51/G52/G71/G72/G76 Bifrost 以及 G57/G68/G77/G78/G78AE/G310/G510/G610/G710/G615/G715 Valhall 归类。MaliSX2 与 PanVK 仍是实验性驱动；显示选项不代表驱动一定能呈现或运行 D2R。自定义驱动严格启动，失败不会静默回退；需要恢复时请明确选择 System。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
+启动器提供 System Vulkan、JimVulkan PanVK r10、MaliSX2 0.6.0（Mali kbase，`/dev/mali0`）以及 Qualcomm KGSL（`/dev/kgsl-3d0`）专用的内置 Turnip。Mali 路径没有手机型号白名单：只要设备暴露 `/dev/mali0` 就会进行能力探测，native 日志会把已知的 Mali-G31/G51/G52/G71/G72/G76 Bifrost 以及 G57/G68/G77/G78/G78AE/G310/G510/G610/G710/G615/G715/G620/G720 Valhall 归类。MaliSX2 与 PanVK 仍是实验性驱动；显示选项不代表驱动一定能呈现或运行 D2R。自定义驱动严格启动，失败不会静默回退；需要恢复时请明确选择 System。详见[驱动说明](ANDROID_GPU_DRIVER.zh-CN.md)。
 
 Android 模拟外部存储上的 xattr 查询可能返回 `EOPNOTSUPP`。此时 RomFS 路径解析会直接使用物理文件名作为客体名（包括 `.build.config` 等点文件）；存档仍位于应用私有的 `files/save/`。
 Android APK 会在每次游戏读取设置前强制文字和语音为英文（`Language` / `VoiceLanguage` = `0`），覆盖旧的中文设置和 `lang_en` 选择，但保留其他设置与存档数据。此 Android 版本不提供游戏内语言切换。

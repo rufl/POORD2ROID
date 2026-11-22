@@ -116,7 +116,11 @@ s5=g['slots'][5]; ss6=T.get('s6',1.0); rect('SkillButton6',x=X((s5[0]+s5[2])/2)-
 kids=j['children']
 if not ANDROID:
     sb6=next(c for c in kids if c['name']=='SkillButton6'); kids.remove(sb6); kids.insert(kids.index(by['Overlay']),sb6)
-es=q(T.get('exp',1.5)); rect('ExpBar',x=X(g['EX0'])+T.get('ex',0),y=Y(g['EY'])+T.get('ey',0),scale=es)
+es=q(T.get('exp',1.2 if ANDROID else 1.5))
+# The native widget spans about 942 layout units (ExpFlashRight's offset). At 1.5× it
+# overhangs the 714px slot-width groove; 1.2× leaves room for both ends inside it.
+exp_x=X(g['EX0'])+T.get('ex',0)+(26 if ANDROID else 0)
+rect('ExpBar',x=exp_x,y=Y(g['EY'])+T.get('ey',0),scale=es)
 # 原生 ExpBar 实例保留、排到底图之前被盖住：经验条（底槽 + 填充 + 20 等分刻度）与「Lv · %」由前端 UIKit 按效果图画（原生条与效果图几何对不上、也不带文字）
 # Native ExpBar instance kept, ordered before the base image so it is covered: the experience bar (trough + fill + 20 equal tick marks) and "Lv · %" are drawn by the front-end UIKit per the mockup (the native bar's geometry does not match the mockup, and it carries no text)
 if not ANDROID:

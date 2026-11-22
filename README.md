@@ -32,7 +32,7 @@ O menu mostra apenas as opções compatíveis com a configuração reconhecida; 
 | Opção | Hardware/estado conhecido |
 | --- | --- |
 | **System Vulkan** | Driver Vulkan do fabricante; baseline recomendado para diagnóstico e fallback. |
-| **MaliSX2 0.5.1** | Mali kbase via `/dev/mali0`, Android API 29+. Preferido para G31/G51/G52/G57/G68/G76/G77/G78/G78AE/G310/G510/G610/G710/G615/G715. Experimental e sem MSAA. |
+| **MaliSX2 0.6.0** | Mali kbase via `/dev/mali0`, Android API 29+. Preferido para G31/G51/G52/G57/G68/G76/G77/G78/G78AE/G310/G510/G610/G710/G615/G715/G620/G720. Experimental e sem MSAA. |
 | **JimVulkan PanVK r10** | Mali kbase via `/dev/mali0`, Android API 31+. Preferido para G71/G72 e alternativa para Bifrost/G77-class. Experimental/não conformante. |
 | **Mesa Turnip T30** | Qualcomm/Adreno via KGSL, Android API 30+. Nunca usar em Mali. |
 

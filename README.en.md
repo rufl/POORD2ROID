@@ -31,7 +31,7 @@ The launcher lists only options matching detected hardware and packaged assets; 
 | Option | Known hardware/status |
 | --- | --- |
 | **System Vulkan** | Manufacturer Vulkan driver; recommended baseline and recovery path. |
-| **MaliSX2 0.5.1** | Mali kbase via `/dev/mali0`, Android API 29+. Preferred for G31/G51/G52/G57/G68/G76/G77/G78/G78AE/G310/G510/G610/G710/G615/G715. Experimental and no MSAA. |
+| **MaliSX2 0.6.0** | Mali kbase via `/dev/mali0`, Android API 29+. Preferred for G31/G51/G52/G57/G68/G76/G77/G78/G78AE/G310/G510/G610/G710/G615/G715/G620/G720. Experimental and no MSAA. |
 | **JimVulkan PanVK r10** | Mali kbase via `/dev/mali0`, Android API 31+. Preferred for G71/G72 and alternate for Bifrost/G77-class devices. Experimental/non-conformant. |
 | **Mesa Turnip T30** | Qualcomm/Adreno via KGSL, Android API 30+. Never use on Mali. |
 

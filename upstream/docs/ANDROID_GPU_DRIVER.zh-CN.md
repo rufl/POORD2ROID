@@ -244,11 +244,11 @@ port默认DM_OPMODE=1 Console/Boost，front_game_res(1)=1600×900，最新营地
 
 ## Vulkan 后端（System / MaliSX2 / PanVK / Turnip）
 
-启动器提供四种模式：`system` 始终可选；`malisx2` 是 MaliSX2 0.5.1，仅在 Android API 29+ 且存在 `/dev/mali0` 时显示；`panvk` 是 JimVulkan PanVK r10，仅在 Android API 31+ 且存在 `/dev/mali0` 时显示；`turnip` 是内置 Turnip T30，仅在 API 30+ 且存在 `/dev/kgsl-3d0` 时显示。因此 Xiaomi 11T 应显示 System、MaliSX2、PanVK，不显示 Turnip。
+启动器提供四种模式：`system` 始终可选；`malisx2` 是 MaliSX2 0.6.0，仅在 Android API 29+ 且存在 `/dev/mali0` 时显示；`panvk` 是 JimVulkan PanVK r10，仅在 Android API 31+ 且存在 `/dev/mali0` 时显示；`turnip` 是内置 Turnip T30，仅在 API 30+ 且存在 `/dev/kgsl-3d0` 时显示。因此 Xiaomi 11T 应显示 System、MaliSX2、PanVK，不显示 Turnip。
 
-MaliSX2 0.5.1 覆盖上游声明的 Mali-G31/G51/G52/G76、G57/G68/G77/G78/G78AE、G310/G510/G610/G710、G615/G715；PanVK r10 覆盖其发布说明中的 Bifrost/Valhall Mali 设备。Android 端不再按手机型号或单一 GPU 名称拒绝 Mali：`/dev/mali0` 通过后交给 Vulkan 能力探测，native 日志输出 `mali-bifrost`、`mali-valhall` 或 `mali-unknown`。这扩大了低端 Mali 型号的尝试范围，但不把实验驱动的 D2R 呈现、性能或稳定性变成保证。
+MaliSX2 0.6.0 覆盖上游声明的 Mali-G31/G51/G52/G76、G57/G68/G77/G78/G78AE、G310/G510/G610/G710、G615/G715、G620/G720；PanVK r10 覆盖其发布说明中的 Bifrost/Valhall Mali 设备。Android 端不再按手机型号或单一 GPU 名称拒绝 Mali：`/dev/mali0` 通过后交给 Vulkan 能力探测，native 日志输出 `mali-bifrost`、`mali-valhall` 或 `mali-unknown`。这扩大了低端 Mali 型号的尝试范围，但不把实验驱动的 D2R 呈现、性能或稳定性变成保证。
 
-MaliSX2 包来自 [上游 v0.5.1](https://github.com/bmdhacks/malisx2/releases/tag/v0.5.1)，锁定提交 `308fe121c7`，ZIP SHA-256 为 `9619ec33ebd9cb8714026f5668e1f4669b5d43a17c1fbb216819ca78eb3d61c5`，库 SHA-256 为 `116cef04107dbf5490a154f8647e4e1ed60df0cacc92b006e89a4b9ba7533419`。构建同时验证 ZIP 和 `.so` SHA-256，APK 附带 MIT 许可证与 notice。它仍是面向 Android Vulkan 应用的实验性驱动，未验证所有列出的 GPU，也未实现 MSAA。Native loader 不只验证 ARM vendor driver ID，还要求 GPU vendor `0x13b5` 且 `driverInfo` 标记 `malisx2`，避免把系统 Mali 驱动误认成已加载 MaliSX2。选择后使用 `require_custom=1`，身份或初始化失败即报错，不会暗中回退；玩家可主动切回 System 或 PanVK。
+MaliSX2 包来自 [上游 v0.6.0](https://github.com/bmdhacks/malisx2/releases/tag/v0.6.0)，锁定提交 `62d6d62423`，ZIP SHA-256 为 `55b17293a6e3ab089e2d255cc6741f574def4c241265547d4a5aaa01cb4047f8`，库 SHA-256 为 `c1c8738fabd6a3b5a8c2d3d0a732b1498a0569251d22cf7f05cd50c81db176fb`。构建同时验证 ZIP 和 `.so` SHA-256，APK 附带 MIT 许可证与 notice。它仍是面向 Android Vulkan 应用的实验性驱动，未验证所有列出的 GPU，也未实现 MSAA。Native loader 不只验证 ARM vendor driver ID，还要求 GPU vendor `0x13b5` 且 `driverInfo` 标记 `malisx2`，避免把系统 Mali 驱动误认成已加载 MaliSX2。选择后使用 `require_custom=1`，身份或初始化失败即报错，不会暗中回退；玩家可主动切回 System 或 PanVK。
 
 历史记录：以下 r8 / FristOneRR 设备验证只代表旧版直接 ICD 加载路径，不代表当前 r9 的 Android 平台 loader 路径。
 

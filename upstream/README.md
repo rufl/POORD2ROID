@@ -72,12 +72,12 @@ Captured on the device (OPPO OPD2409 / Adreno 830). The block in the top-left co
 
 - **Upstream**: [jhaizhou-ops/d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) at `2eb5758771f110cd53082b999d88d242766610da`; its [MIT license](LICENSE) and third-party notices are retained.
 - **Optimization references**: Eden (a Switch emulator; its rendering and upscaling ideas are referenced, but its shader translation is GPL-3.0 and is **not** merged into this MIT project) and LASRecomp.
-- **Bundled graphics drivers**: Turnip for Qualcomm KGSL, JimVulkan PanVK r10, and [MaliSX2 0.5.1](https://github.com/bmdhacks/malisx2/releases/tag/v0.5.1) for Mali kbase, plus the phone's System Vulkan. The Mali launcher path has no phone-model allowlist and classifies known Bifrost/Valhall names for diagnostics; both custom Mali drivers remain experimental. MaliSX2 is MIT-licensed and pinned by archive/library SHA-256.
+- **Bundled graphics drivers**: Turnip for Qualcomm KGSL, JimVulkan PanVK r10, and [MaliSX2 0.6.0](https://github.com/bmdhacks/malisx2/releases/tag/v0.6.0) for Mali kbase, plus the phone's System Vulkan. The Mali launcher path has no phone-model allowlist and classifies known Bifrost/Valhall names for diagnostics; both custom Mali drivers remain experimental. MaliSX2 is MIT-licensed and pinned by archive/library SHA-256.
 - **Build dependencies**: Android NDK r28c, JDK 17, Android SDK build-tools / platform 35 (pinned by `bootstrap.py`).
 - **Packing game data additionally needs** (on the player's PC only): a Python venv (`lz4`, `capstone`, ...), `hactool`, and the .NET 10 SDK; the skill's prerequisites table lists them.
 
 **This repository does not contain** game executables, RomFS, keys, saves, translated game shaders or APKs. The game modules and the data package are produced locally from **your own** files and are never distributed here or in a release.
 
-The APK includes selectable System Vulkan, Turnip, PanVK and MaliSX2 drivers where the device supports them. MaliSX2 is pinned to upstream 0.5.1 with archive and library SHA-256 verification; its MIT license and notice are included. It has no blanket D2R/Xiaomi 11T gameplay guarantee and upstream says MSAA is not implemented. `--no-malisx2` excludes it. See the [English driver matrix](docs/ANDROID_GPU_DRIVER.md) or [Portuguese matrix](docs/ANDROID_GPU_DRIVER.pt-BR.md).
+The APK includes selectable System Vulkan, Turnip, PanVK and MaliSX2 drivers where the device supports them. MaliSX2 is pinned to upstream 0.6.0 with archive and library SHA-256 verification; its MIT license and notice are included. It has no blanket D2R/Xiaomi 11T gameplay guarantee and upstream says MSAA is not implemented. `--no-malisx2` excludes it. See the [English driver matrix](docs/ANDROID_GPU_DRIVER.md) or [Portuguese matrix](docs/ANDROID_GPU_DRIVER.pt-BR.md).
 
 CI (GitHub Actions) builds the APK and the kit described above; see [the build notes](docs/ANDROID_BUILD.md).

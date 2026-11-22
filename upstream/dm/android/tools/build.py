@@ -57,8 +57,8 @@ def run(args, **kwargs):
 PANVK_ARCHIVE_SHA256 = "7e97db4d79d81ec9461d1e0676b62a865561cb56e21c151693aa25ffbe749f1c"
 PANVK_LIBRARY_SHA256 = "80acd461bdf07f5fb99af5c7f516e272103340b6775c22dcd347a6d418c7ac0d"
 
-MALISX2_ARCHIVE_SHA256 = "9619ec33ebd9cb8714026f5668e1f4669b5d43a17c1fbb216819ca78eb3d61c5"
-MALISX2_LIBRARY_SHA256 = "116cef04107dbf5490a154f8647e4e1ed60df0cacc92b006e89a4b9ba7533419"
+MALISX2_ARCHIVE_SHA256 = "55b17293a6e3ab089e2d255cc6741f574def4c241265547d4a5aaa01cb4047f8"
+MALISX2_LIBRARY_SHA256 = "c1c8738fabd6a3b5a8c2d3d0a732b1498a0569251d22cf7f05cd50c81db176fb"
 
 
 def package_malisx2(archive_path, assets, licenses):
@@ -72,8 +72,8 @@ def package_malisx2(archive_path, assets, licenses):
     try:
         with zipfile.ZipFile(archive_path) as archive:
             metadata = json.loads(archive.read("meta.json"))
-            if (metadata.get("name") != "malisx2 0.5.1 (308fe121c7)"
-                    or metadata.get("packageVersion") != "0.5.1+308fe121c7"
+            if (metadata.get("name") != "malisx2 0.6.0 (62d6d62423)"
+                    or metadata.get("packageVersion") != "0.6.0+62d6d62423"
                     or metadata.get("minApi") != 29
                     or metadata.get("libraryName") != "libvulkan_malisx2.so"):
                 sys.exit("Unexpected MaliSX2 package metadata")
@@ -88,8 +88,8 @@ def package_malisx2(archive_path, assets, licenses):
     temporary.replace(output / "libvulkan_malisx2.so")
     (output / "driver.sha256").write_text(MALISX2_LIBRARY_SHA256 + "\n", encoding="ascii")
     (output / "NOTICE.txt").write_text(
-        "MaliSX2 0.5.1 (308fe121c7), bundled from bmdhacks/malisx2.\n"
-        "Release: https://github.com/bmdhacks/malisx2/releases/tag/v0.5.1\n"
+        "MaliSX2 0.6.0 (62d6d62423), bundled from bmdhacks/malisx2.\n"
+        "Release: https://github.com/bmdhacks/malisx2/releases/tag/v0.6.0\n"
         "Mesa-derived components use their respective licenses; source is pinned at\n"
         "https://github.com/bmdhacks/armsx2-turnip/tree/b5f8787e44083b4840f605b595e79fcf61077175\n"
         "Experimental alternate Vulkan driver. D2R/Android window presentation and Xiaomi 11T gameplay are unverified.\n"
@@ -97,7 +97,7 @@ def package_malisx2(archive_path, assets, licenses):
         encoding="utf-8")
     shutil.copyfile(ROOT / "prebuilt/MaliSX2-LICENSE.txt", licenses / "MaliSX2-LICENSE.txt")
     shutil.copyfile(output / "NOTICE.txt", licenses / "MaliSX2-NOTICE.txt")
-    print("MaliSX2 0.5.1 ICD: archive and library checksums verified", flush=True)
+    print("MaliSX2 0.6.0 ICD: archive and library checksums verified", flush=True)
 
 
 def sha256_file(path):
@@ -227,8 +227,8 @@ def main():
                         help="pinned JimVulkan r10 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-panvk", action="store_true",
                         help="明确构建不含 PanVK 的 APK")
-    parser.add_argument("--malisx2", type=Path, default=ROOT / "prebuilt/malisx2-0.5.1-308fe121c7.zip",
-                        help="pinned MaliSX2 0.5.1 package; archive and library SHA-256 are verified")
+    parser.add_argument("--malisx2", type=Path, default=ROOT / "prebuilt/malisx2-0.6.0-62d6d62423.zip",
+                        help="pinned MaliSX2 0.6.0 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-malisx2", action="store_true",
                         help="明确构建不含 MaliSX2 的 APK")
     parser.add_argument("--touch-overlay-migration", type=Path,
@@ -337,7 +337,7 @@ def main():
         shutil.copyfile(artwork, assets / artwork.name)
     for override in sorted((ROOT / "local").glob("launcher-background.*")):
         shutil.copyfile(override, assets / override.name)
-    # Turnip is Qualcomm KGSL-only. PanVK r9 lists Mali-G77 support and includes Android gralloc support; load it
+    # Turnip is Qualcomm KGSL-only. PanVK r10 lists Mali-G77 support and includes Android gralloc support; load it
     # through Android's platform Vulkan loader so the platform loader supplies Android WSI.
     if args.no_turnip:
         shutil.rmtree(assets / "turnip", ignore_errors=True)

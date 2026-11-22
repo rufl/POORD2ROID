@@ -27,7 +27,7 @@ O build publicado atual é a [v0.7.1](https://github.com/rufl/POORD2ROID/release
 
 ## Drivers
 
-O APK inclui System Vulkan, MaliSX2 0.5.1, PanVK r10 e Turnip T30. As recomendações completas por GPU estão em [ANDROID_GPU_DRIVER.pt-BR.md](ANDROID_GPU_DRIVER.pt-BR.md). Turnip é exclusivo para Qualcomm Adreno; em Mali use MaliSX2, PanVK ou System Vulkan conforme a matriz.
+O APK inclui System Vulkan, MaliSX2 0.6.0, PanVK r10 e Turnip T30. As recomendações completas por GPU estão em [ANDROID_GPU_DRIVER.pt-BR.md](ANDROID_GPU_DRIVER.pt-BR.md). Turnip é exclusivo para Qualcomm Adreno; em Mali use MaliSX2, PanVK ou System Vulkan conforme a matriz.
 
 ## Verificação
 

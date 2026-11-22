@@ -19,11 +19,11 @@ O APK v0.7.5 usa `versionName=0.7.5-android-port`, `versionCode=705` e SHA-256 `
 
 | GPU | Driver inicial | Alternativa |
 |---|---|---|
-| G31/G51/G52/G76 | MaliSX2 0.5.1 | PanVK r10 no API 31+ |
+| G31/G51/G52/G76 | MaliSX2 0.6.0 | PanVK r10 no API 31+ |
 | G71/G72 | PanVK r10 no API 31+ | System Vulkan |
-| G57/G68/G77/G78/G78AE | MaliSX2 0.5.1 | PanVK r10 no API 31+ |
-| G310/G510/G610/G710/G615/G715 | MaliSX2 0.5.1 | System Vulkan |
-| T604/T628/T720/T760/T820/T830/T860/T880, G620/G725 | System Vulkan | — |
+| G57/G68/G77/G78/G78AE | MaliSX2 0.6.0 | PanVK r10 no API 31+ |
+| G310/G510/G610/G710/G615/G715/G620/G720 | MaliSX2 0.6.0 | System Vulkan ou PanVK r10 quando reconhecido |
+| T604/T628/T720/T760/T820/T830/T860/T880, G725 | System Vulkan | — |
 
 A matriz completa, limitações e checksums está em [docs/ANDROID_GPU_DRIVER.pt-BR.md](docs/ANDROID_GPU_DRIVER.pt-BR.md). A matriz usa a GPU real, não o nome comercial do telefone. O launcher não bloqueia modelos Mali por whitelist; a confirmação final vem do log Vulkan.
 

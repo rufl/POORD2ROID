@@ -29,6 +29,14 @@ for orb in ('HealthBall', 'ManaBall'):
     value = next(c for c in a[orb]['children'] if c['name'] == 'ValueDisplay')
     assert value['fields']['rect']['x'] != -6000, orb + ' value hidden on Android'
 assert a['ExpBar']['fields']['rect']['x'] != -6000, 'XP hidden on Android'
+ui = json.load(open(sys.argv[2].rsplit('/', 1)[0] + '/hud_v4_ui/ui.json', encoding='utf-8'))
+exp = a['ExpBar']
+right = next(c for c in exp['children'] if c['name'] == 'ExpFlashRight')
+scale = ui['ref'][1] / 2160
+left_px = ui['ref'][0] / 2 + exp['fields']['rect']['x'] * scale
+right_px = left_px + right['fields']['rect']['x'] * exp['fields']['rect']['scale'] * scale
+assert left_px >= ui['exp']['x0'] and right_px <= ui['exp']['x1'], (
+    'Android XP extends beyond its groove', left_px, right_px, ui['exp'])
 for name in ('SkillButton1', 'SkillButton2', 'SkillButton3', 'SkillButton4', 'SkillButton5'):
     assert a[name]['fields']['rect'] != a['SkillButton6']['fields']['rect'], name + ' hidden under Android overlay'
 assert i['ExpBar']['fields']['rect']['x'] == -6000, 'iOS drawV4 split regressed'

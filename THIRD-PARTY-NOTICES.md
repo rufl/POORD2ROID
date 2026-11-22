@@ -19,21 +19,21 @@ This file records third-party code and binary components used, modified, or redi
 
 ## Bundled Vulkan drivers and loader components
 
-### MaliSX2 0.4.0
+### MaliSX2 0.6.0
 
-- Project/release: <https://github.com/bmdhacks/malisx2/releases/tag/v0.4.0>
-- Pinned source reference: <https://github.com/bmdhacks/armsx2-turnip/tree/f59c211100b174191d9df540451e94b2d5cb2b26>
-- Package: `malisx2-0.4.0-63e307e63a.zip`; SHA-256 `835f980506ed46fa51925fd279b256d23b0ddf481ffd1ab39be2fee275cf8bf8`.
-- Library: `libvulkan_malisx2.so`; SHA-256 `0148e1ea6263653ef376007274eefdf1d58fb63eadf66e2290c6cc49219c0365`.
+- Project/release: <https://github.com/bmdhacks/malisx2/releases/tag/v0.6.0>
+- Pinned source reference: <https://github.com/bmdhacks/malisx2/tree/62d6d6242372d31b22b705b4b0892e1ff6ce684c>
+- Package: `malisx2-0.6.0-62d6d62423.zip`; SHA-256 `55b17293a6e3ab089e2d255cc6741f574def4c241265547d4a5aaa01cb4047f8`.
+- Library: `libvulkan_malisx2.so`; SHA-256 `c1c8738fabd6a3b5a8c2d3d0a732b1498a0569251d22cf7f05cd50c81db176fb`.
 - License: MIT, copyright 2026 ARMSX2 and bmdhacks. The binary includes Mesa-derived components; consult the upstream vendor-license inventory and APK notice before redistribution.
-- The build verifies the pinned archive and library hashes. Upstream's stated Mali support is not proof of D2R or Xiaomi 11T compatibility. The release notes identify MSAA as not implemented.
+- The build verifies the pinned archive and library hashes. Upstream lists Mali-G77 and adds Vulkan 1.3 for G57-class and newer GPUs, but that does not prove D2R or Xiaomi 11T compatibility. MSAA remains unimplemented.
 
-### JimVulkan PanVK r9 (Mesa 27.0.0-devel)
+### JimVulkan PanVK r10 (Mesa 27.0.0-devel)
 
-- Release/source: <https://github.com/JimVulkan/mali-panvk/releases/tag/v1.5.0>
-- Pinned package: `upstream/dm/android/prebuilt/mali-panvk-27.0.0-devel-r9.zip`; SHA-256 `04d82e2f35e4e80138f9a407ec4222e40908b32196eb7484355993e6c5fdc376`.
-- Bundled library `libvulkan_panfrost.so`; SHA-256 `6baf04f6075fe57d0dc1738039cf91d8db6ce98c9203dd9dc3d638f42c49e62a`.
-- License: MIT for PanVK changes; the package's `NOTICE.txt` contains Mesa and third-party notices and is included in the APK as `PanVK-JimVulkan-r9.txt`.
+- Release/source: <https://github.com/JimVulkan/mali-panvk/releases/tag/v1.6.0>
+- Pinned package: `upstream/dm/android/prebuilt/mali-panvk-27.0.0-devel-r10.zip`; SHA-256 `7e97db4d79d81ec9461d1e0676b62a865561cb56e21c151693aa25ffbe749f1c`.
+- Bundled library `libvulkan_panfrost.so`; SHA-256 `80acd461bdf07f5fb99af5c7f516e272103340b6775c22dcd347a6d418c7ac0d`.
+- License: MIT for PanVK changes; the package's `NOTICE.txt` contains Mesa and third-party notices and is included in the APK as `PanVK-JimVulkan-r10.txt`.
 - Status: experimental and non-conformant. Hardware support or successful device initialization does not demonstrate Android presentation or working D2R gameplay. Treat as an experimental option.
 
 ### Mesa Turnip T30

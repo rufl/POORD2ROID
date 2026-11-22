@@ -9,7 +9,7 @@ This is the canonical GPU-family matrix for the POORD2ROID Android APK. GPU fami
 | Driver | Path | Minimum Android | Recommendation |
 |---|---|---:|---|
 | **System Vulkan** | Vendor Vulkan | Any | Baseline, recovery, and only bundled choice for legacy/unknown GPUs |
-| **MaliSX2 0.5.1** | Mali kbase `/dev/mali0` | API 29 | First custom driver for the listed MaliSX2 families; preferred for G57/G68/G77 |
+| **MaliSX2 0.6.0** | Mali kbase `/dev/mali0` | API 29 | First custom driver for the listed MaliSX2 families; preferred for G57/G68/G77 |
 | **PanVK r10** | Mali kbase `/dev/mali0` | API 31 | Preferred for G71/G72; alternate for Bifrost/G77-class devices |
 | **Turnip T30** | Qualcomm KGSL `/dev/kgsl-3d0` | API 30 | Adreno only; never select on Mali |
 
@@ -19,25 +19,26 @@ Custom drivers are experimental. Availability in the launcher does not prove dev
 
 | GPU family | Architecture | First driver | Alternate | Notes |
 |---|---|---|---|---|
-| G31 | Bifrost | MaliSX2 0.5.1 | PanVK r10 API 31+; System | Low-end bandwidth/memory headroom |
-| G51 / G52 | Bifrost | MaliSX2 0.5.1 | PanVK r10 API 31+; System | Check vendor feature exposure |
-| G71 / G72 | Bifrost | PanVK r10 API 31+ | System | Not listed by MaliSX2 0.5.1 |
-| G76 | Bifrost | MaliSX2 0.5.1 | PanVK r10 API 31+; System | Compare drivers on device firmware |
-| G57 / G68 | Valhall v9 | MaliSX2 0.5.1 | PanVK r10 when recognized; System | API 29+ MaliSX2, API 31+ PanVK |
-| G77 | Valhall v9 | MaliSX2 0.5.1 | PanVK r10 API 31+; System | Xiaomi 11T G77 MC9 reference device |
-| G78 / G78AE | Valhall | MaliSX2 0.5.1 | PanVK r10 when recognized; System | Do not assume G77 results transfer |
-| G310 / G510 | Valhall v10 | MaliSX2 0.5.1 | System | Watch sustained thermals and memory |
-| G610 / G710 | Valhall v10 | MaliSX2 0.5.1 | System | Experimental custom path |
-| G615 / G715 | Valhall v11 | MaliSX2 0.5.1 | System; PanVK only if explicitly recognized | Immortalis/ray-tracing features are not promised |
+| G31 | Bifrost | MaliSX2 0.6.0 | PanVK r10 API 31+; System | Low-end bandwidth/memory headroom |
+| G51 / G52 | Bifrost | MaliSX2 0.6.0 | PanVK r10 API 31+; System | Check vendor feature exposure |
+| G71 / G72 | Bifrost | PanVK r10 API 31+ | System | Not listed by MaliSX2 0.6.0 |
+| G76 | Bifrost | MaliSX2 0.6.0 | PanVK r10 API 31+; System | Compare drivers on device firmware |
+| G57 / G68 | Valhall v9 | MaliSX2 0.6.0 | PanVK r10 when recognized; System | API 29+ MaliSX2, API 31+ PanVK |
+| G77 | Valhall v9 | MaliSX2 0.6.0 | PanVK r10 API 31+; System | Xiaomi 11T G77 MC9 reference device |
+| G78 / G78AE | Valhall v9 | MaliSX2 0.6.0 | PanVK r10 when recognized; System | Do not assume G77 results transfer |
+| G310 / G510 | Valhall v10 | MaliSX2 0.6.0 | System | Watch sustained thermals and memory |
+| G610 / G710 | Valhall v10 | MaliSX2 0.6.0 | PanVK r10 when recognized; System | Experimental custom path |
+| G615 / G715 | Valhall v11 | MaliSX2 0.6.0 | PanVK r10 when recognized; System | Immortalis/ray-tracing features are not promised |
+| G620 / G720 | Valhall v12 | MaliSX2 0.6.0 | PanVK r10 when recognized; System | Newly listed by MaliSX2 0.6.0; validate on actual firmware |
 
 ## System-only families in this APK
 
-Mali-400/450/470, T604/T628/T720/T760/T820/T830/T860/T880, G620, G725, and any family not listed by the pinned MaliSX2/PanVK releases use System Vulkan only. The system driver may still work if it exposes the required Vulkan queue, formats, memory, and shader features.
+Mali-400/450/470, T604/T628/T720/T760/T820/T830/T860/T880, G725, and any family not listed by the pinned MaliSX2/PanVK releases use System Vulkan only. The system driver may still work if it exposes the required Vulkan queue, formats, memory, and shader features.
 
 ## Recommended test order
 
 1. System Vulkan baseline.
-2. MaliSX2 0.5.1 on API 29–30 Mali devices.
+2. MaliSX2 0.6.0 on API 29–30 Mali devices.
 3. MaliSX2 versus PanVK r10 on API 31+ Bifrost/G77-class devices.
 4. System Vulkan for unsupported or unstable custom paths.
 
@@ -50,9 +51,9 @@ Confirm `[vulkan-device] profile=`, `[vulkan-subgroup]`, and final driver identi
 
 ## Pinned checksums
 
-- MaliSX2 archive: `9619ec33ebd9cb8714026f5668e1f4669b5d43a17c1fbb216819ca78eb3d61c5`
-- MaliSX2 library: `116cef04107dbf5490a154f8647e4e1ed60df0cacc92b006e89a4b9ba7533419`
+- MaliSX2 archive: `55b17293a6e3ab089e2d255cc6741f574def4c241265547d4a5aaa01cb4047f8`
+- MaliSX2 library: `c1c8738fabd6a3b5a8c2d3d0a732b1498a0569251d22cf7f05cd50c81db176fb`
 - PanVK archive: `7e97db4d79d81ec9461d1e0676b62a865561cb56e21c151693aa25ffbe749f1c`
 - PanVK library: `80acd461bdf07f5fb99af5c7f516e272103340b6775c22dcd347a6d418c7ac0d`
 
-Sources: [MaliSX2 v0.5.1](https://github.com/bmdhacks/malisx2/releases/tag/v0.5.1) and [JimVulkan PanVK releases](https://github.com/JimVulkan/mali-panvk/releases).
+Sources: [MaliSX2 v0.6.0](https://github.com/bmdhacks/malisx2/releases/tag/v0.6.0) and [JimVulkan PanVK releases](https://github.com/JimVulkan/mali-panvk/releases).

@@ -13,13 +13,13 @@
 <p>Native ARM64 Android port. This page is the public Mali driver matrix; the repository and APK contain no game data or keys.</p>
 <div class="card"><h2>Current release: v0.7.1</h2><p>Commit <code>4f0933a</code>; APK <code>0.7.1-android-port</code> / code 701. The ARM64 build passed. Device A/B validation is pending, so no FPS improvement is claimed. <a href="https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1">Release and APK</a>.</p></div>
 <div class="card"><h2>Recommended driver by GPU</h2><table><thead><tr><th>GPU family</th><th>First driver</th><th>Fallback / alternate</th><th>Minimum API</th></tr></thead><tbody>
-<tr><td>G31, G51, G52, G76</td><td>MaliSX2 0.5.1</td><td>PanVK r10 on API 31+, then System Vulkan</td><td>29 / 31</td></tr>
+<tr><td>G31, G51, G52, G76</td><td>MaliSX2 0.6.0</td><td>PanVK r10 on API 31+, then System Vulkan</td><td>29 / 31</td></tr>
 <tr><td>G71, G72</td><td>PanVK r10</td><td>System Vulkan</td><td>31</td></tr>
-<tr><td>G57, G68, G77, G78, G78AE</td><td>MaliSX2 0.5.1</td><td>PanVK r10 on API 31+, then System Vulkan</td><td>29 / 31</td></tr>
-<tr><td>G310, G510, G610, G710, G615, G715</td><td>MaliSX2 0.5.1</td><td>System Vulkan</td><td>29</td></tr>
-<tr><td>Legacy T-series, G620, G725, unknown</td><td>System Vulkan</td><td>No bundled custom guarantee</td><td>Vendor-defined</td></tr>
+<tr><td>G57, G68, G77, G78, G78AE</td><td>MaliSX2 0.6.0</td><td>PanVK r10 on API 31+, then System Vulkan</td><td>29 / 31</td></tr>
+<tr><td>G310, G510, G610, G710, G615, G715, G620, G720</td><td>MaliSX2 0.6.0</td><td>PanVK r10 when recognized, then System Vulkan</td><td>29 / 31</td></tr>
+<tr><td>Legacy T-series, G725, unknown</td><td>System Vulkan</td><td>No bundled custom guarantee</td><td>Vendor-defined</td></tr>
 </tbody></table></div>
-<div class="card"><h2>Driver facts</h2><ul><li><b>MaliSX2 0.5.1:</b> `/dev/mali0`, Android API 29+, experimental, no MSAA.</li><li><b>PanVK r10:</b> `/dev/mali0`, Android API 31+, experimental/non-conformant.</li><li><b>System Vulkan:</b> always available recovery path.</li><li><b>Turnip T30:</b> Qualcomm KGSL/Adreno only; never use it on Mali.</li></ul><p class="warning">A launcher option is not proof of compatibility. Confirm <code>[vulkan-device] profile=</code> and the final driver identity in logcat/game.log.</p></div>
-<div class="card"><h2>Checksums</h2><p>MaliSX2 archive: <code>9619ec33ebd9cb8714026f5668e1f4669b5d43a17c1fbb216819ca78eb3d61c5</code><br>PanVK archive: <code>7e97db4d79d81ec9461d1e0676b62a865561cb56e21c151693aa25ffbe749f1c</code></p></div>
+<div class="card"><h2>Driver facts</h2><ul><li><b>MaliSX2 0.6.0:</b> `/dev/mali0`, Android API 29+, experimental, no MSAA.</li><li><b>PanVK r10:</b> `/dev/mali0`, Android API 31+, experimental/non-conformant.</li><li><b>System Vulkan:</b> always available recovery path.</li><li><b>Turnip T30:</b> Qualcomm KGSL/Adreno only; never use it on Mali.</li></ul><p class="warning">A launcher option is not proof of compatibility. Confirm <code>[vulkan-device] profile=</code> and the final driver identity in logcat/game.log.</p></div>
+<div class="card"><h2>Checksums</h2><p>MaliSX2 archive: <code>55b17293a6e3ab089e2d255cc6741f574def4c241265547d4a5aaa01cb4047f8</code><br>PanVK archive: <code>7e97db4d79d81ec9461d1e0676b62a865561cb56e21c151693aa25ffbe749f1c</code></p></div>
 <h2>Português (Brasil)</h2><p>O launcher não usa whitelist de telefones. A GPU real é classificada no runtime; consulte a <a href="https://github.com/rufl/POORD2ROID/blob/main/docs/ANDROID_GPU_DRIVER.pt-BR.md">matriz completa em PT-BR</a>.</p>
 </main></body></html>
