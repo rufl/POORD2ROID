@@ -1,6 +1,6 @@
 # Build on Windows with WSL
 
-The Android build uses Linux tools. On Windows, build inside WSL2 (Ubuntu or another supported Linux distribution) rather than using the obsolete native-Windows wrapper described in earlier revisions. Current release: [v0.7.4](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.4) · [Changelog](../CHANGELOG.md) · Driver matrix: [`ANDROID_GPU_DRIVER.md`](ANDROID_GPU_DRIVER.md) · [`ANDROID_GPU_DRIVER.pt-BR.md`](ANDROID_GPU_DRIVER.pt-BR.md).
+The Android build uses Linux tools. On Windows, build inside WSL2 (Ubuntu or another supported Linux distribution) rather than using the obsolete native-Windows wrapper described in earlier revisions. Current release: [v0.7.5](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.5) · [Changelog](../CHANGELOG.md) · Driver matrix: [`ANDROID_GPU_DRIVER.md`](ANDROID_GPU_DRIVER.md) · [`ANDROID_GPU_DRIVER.pt-BR.md`](ANDROID_GPU_DRIVER.pt-BR.md).
 
 ## Prerequisites
 
@@ -17,7 +17,7 @@ The Android build script is `upstream/dm/android/tools/build.py`. A complete pac
 
 Build output is under `upstream/dm/android/build/`. The signing key determines whether Android accepts an APK as an in-place update: use the same signing identity as the installed app or uninstall the old app first (uninstalling can remove app-private data, so back it up).
 
-The current release APK reports `versionName=0.7.4-android-port` and `versionCode=704`; SHA-256 is `47eb0f3aee346f8b904cbb02eb7a770f8df679263cfa70c4f702501cdb31481d`. Build with `--game-run --version v0.7.4` to reproduce that manifest identity. Compilation and v3 signing verification passed; final device visual validation remains outstanding.
+The current release APK reports `versionName=0.7.5-android-port` and `versionCode=705`; SHA-256 is `2ef8b49537a43766877f0924d62d6cf247146b0d2c5f7c59373890a265423238`. Build with `--game-run --version v0.7.5` to reproduce that manifest identity. Compilation and v3 signing verification passed; final device visual validation remains outstanding.
 
 ## Device diagnostics
 

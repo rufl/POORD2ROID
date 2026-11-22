@@ -6,14 +6,14 @@ English: [README.md](README.md) · 中文: [README.zh-CN.md](README.zh-CN.md) ·
 
 ## Download
 
-Baixe a versão atual [v0.7.4](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.4) ou consulte todas as [Releases](https://github.com/rufl/POORD2ROID/releases):
+Baixe a versão atual [v0.7.5](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.5) ou consulte todas as [Releases](https://github.com/rufl/POORD2ROID/releases):
 
-1. `D2R-Android-port-v0.7.4.apk` — aplicativo Android atual.
+1. `D2R-Android-port-v0.7.5.apk` — aplicativo Android atual.
 2. `d2r-package-kit-<versão>.zip` — quando anexado, contém as ferramentas para gerar o pacote a partir dos seus próprios arquivos; caso contrário, use esta árvore de código.
 
 O APK não contém jogo. Use o kit com um agente de código para preparar os dados localmente e instalar por ADB.
 
-O APK v0.7.4 usa `versionName=0.7.4-android-port`, `versionCode=704` e SHA-256 `47eb0f3aee346f8b904cbb02eb7a770f8df679263cfa70c4f702501cdb31481d`. É o package-only completo: contém launcher Java, atividade de jogo, `classes.dex` e os perfis normal/large de touch-layout. A correção `currentTransform` e os ajustes recentes foram mantidos; a confirmação visual final em dispositivo ainda é necessária.
+O APK v0.7.5 usa `versionName=0.7.5-android-port`, `versionCode=705` e SHA-256 `2ef8b49537a43766877f0924d62d6cf247146b0d2c5f7c59373890a265423238`. É o package-only completo: contém launcher Java, atividade de jogo, `classes.dex` e os perfis normal/large de touch-layout. A seleção de `preTransform` Vulkan voltou ao comportamento anterior que prioriza `identity`; a confirmação visual final em dispositivo ainda é necessária.
 
 ## Escolha do driver por GPU Mali
 

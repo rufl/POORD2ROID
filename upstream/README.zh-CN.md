@@ -8,12 +8,12 @@ English: [README.md](README.md) · Português (Brasil): [README.pt-BR.md](README
 
 **方式一：下载现成制品（推荐）**
 
-在 [Releases](https://github.com/rufl/POORD2ROID/releases) 下载制品。当前手工发布的是 [v0.7.4](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.4)；由 CI 建立的 tag 版本还可能附带电脑端打包套件：
+在 [Releases](https://github.com/rufl/POORD2ROID/releases) 下载制品。当前手工发布的是 [v0.7.5](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.5)；由 CI 建立的 tag 版本还可能附带电脑端打包套件：
 
-1. `D2R-Android-port-v0.7.4.apk` —— 当前手机端应用。**不含游戏数据**，数据靠下面的包导入。
+1. `D2R-Android-port-v0.7.5.apk` —— 当前手机端应用。**不含游戏数据**，数据靠下面的包导入。
 2. `d2r-package-kit-<版本>.zip` —— Release 附带时使用的电脑端打包套件：源码（打包工具在里面）+ `d2r-package` 技能 + 上面那个 APK + 一页说明。未附带时使用本源码树与相同技能。
 
-v0.7.4 APK 的 `versionName` 为 `0.7.4-android-port`、`versionCode` 为 `704`，SHA-256 为 `47eb0f3aee346f8b904cbb02eb7a770f8df679263cfa70c4f702501cdb31481d`；这是完整的 package-only APK，包含 Java 启动器、游戏 Activity、`classes.dex` 以及 normal/large 触控布局迁移档案，并保留 Vulkan `currentTransform` 修复和近期改动。最终设备画面仍需确认。
+v0.7.5 APK 的 `versionName` 为 `0.7.5-android-port`、`versionCode` 为 `705`，SHA-256 为 `2ef8b49537a43766877f0924d62d6cf247146b0d2c5f7c59373890a265423238`；这是完整的 package-only APK，包含 Java 启动器、游戏 Activity、`classes.dex` 以及 normal/large 触控布局迁移档案。Vulkan `preTransform` 已恢复为优先使用 `identity` 的早期行为；最终设备画面仍需确认。
 
 然后：
 
