@@ -234,6 +234,8 @@ def main():
     parser.add_argument("--touch-overlay-migration", type=Path,
                         help="embed normal and large complete Android touch overlays, selected on the next game launch")
     args = parser.parse_args()
+    if re.fullmatch(r"v?\d+(\.\d+)*", args.version) and not args.game_run:
+        parser.error("release versions require --game-run; probe APKs must use a non-release version")
     if args.game_source and not args.game_run: parser.error("--game-source only makes sense with --game-run")
     if args.touch_overlay_migration and not args.game_run:
         parser.error("--touch-overlay-migration requires --game-run")

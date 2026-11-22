@@ -1,6 +1,6 @@
 # Build on Windows with WSL
 
-The Android build uses Linux tools. On Windows, build inside WSL2 (Ubuntu or another supported Linux distribution) rather than using the obsolete native-Windows wrapper described in earlier revisions. Current release: [v0.7.3](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.3) · [Changelog](../CHANGELOG.md) · Driver matrix: [`ANDROID_GPU_DRIVER.md`](ANDROID_GPU_DRIVER.md) · [`ANDROID_GPU_DRIVER.pt-BR.md`](ANDROID_GPU_DRIVER.pt-BR.md).
+The Android build uses Linux tools. On Windows, build inside WSL2 (Ubuntu or another supported Linux distribution) rather than using the obsolete native-Windows wrapper described in earlier revisions. Current release: [v0.7.4](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.4) · [Changelog](../CHANGELOG.md) · Driver matrix: [`ANDROID_GPU_DRIVER.md`](ANDROID_GPU_DRIVER.md) · [`ANDROID_GPU_DRIVER.pt-BR.md`](ANDROID_GPU_DRIVER.pt-BR.md).
 
 ## Prerequisites
 
@@ -13,11 +13,11 @@ The Android build uses Linux tools. On Windows, build inside WSL2 (Ubuntu or ano
 
 From the WSL shell, clone this repository into a WSL-accessible path (recommended), then follow the bootstrap and build steps in [`upstream/docs/ANDROID_BUILD.md`](../upstream/docs/ANDROID_BUILD.md). Avoid the obsolete native-Windows wrapper and its old `build-win.py` / `build-tools-win` instructions.
 
-The Android build script is `upstream/dm/android/tools/build.py`. A game-enabled build requires locally prepared game sources and shader data; a generic launcher APK does not contain game assets. Keep any personal game data, keys, and generated protected content outside version control.
+The Android build script is `upstream/dm/android/tools/build.py`. A complete package-only APK requires `--game-run`; without it, the script intentionally builds only the diagnostic NativeActivity probe. Keep any personal game data, keys, and generated protected content outside version control.
 
 Build output is under `upstream/dm/android/build/`. The signing key determines whether Android accepts an APK as an in-place update: use the same signing identity as the installed app or uninstall the old app first (uninstalling can remove app-private data, so back it up).
 
-The current release APK reports `versionName=0.7.3-android-port` and `versionCode=703`; SHA-256 is `a70e57f38eb3abdae9899420d4ee144cee56bf6a8e3d87b0273a05e6261c2315`. Build with `--version v0.7.3` to reproduce that manifest identity. Compilation and v3 signing verification passed; final device visual validation remains outstanding.
+The current release APK reports `versionName=0.7.4-android-port` and `versionCode=704`; SHA-256 is `47eb0f3aee346f8b904cbb02eb7a770f8df679263cfa70c4f702501cdb31481d`. Build with `--game-run --version v0.7.4` to reproduce that manifest identity. Compilation and v3 signing verification passed; final device visual validation remains outstanding.
 
 ## Device diagnostics
 

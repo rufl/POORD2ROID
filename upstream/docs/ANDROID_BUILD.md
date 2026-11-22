@@ -16,7 +16,7 @@ Prepare the user's RomFS and rewritten `main`, `sdk`, and `subsdk0` modules, plu
 
 ```bash
 python3 dm/android/tools/bootstrap.py
-python3 dm/android/tools/build.py --game-run --version v0.7.3 \
+python3 dm/android/tools/build.py --game-run --version v0.7.4 \
   --game-source /path/to/prepared/game \
   --shader-cache /path/to/prepared/shaders/spirv
 python3 dm/android/tools/ci_checks.py
@@ -26,7 +26,7 @@ The output is `dm/android/build/D2R-Android-port.apk`. Install it using `adb -s 
 
 ### Current published build
 
-[v0.7.3](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.3) is the current published build. Its APK reports `versionName=0.7.3-android-port` and `versionCode=703`; SHA-256 is `a70e57f38eb3abdae9899420d4ee144cee56bf6a8e3d87b0273a05e6261c2315`. The Vulkan swapchain now uses the Android surface `currentTransform` for `preTransform`, fixing sideways output on devices reporting `ROTATE_90`. The ARM64 build and v3 signing verification passed; final device visual validation remains outstanding.
+[v0.7.4](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.4) is the current published build. Its APK reports `versionName=0.7.4-android-port` and `versionCode=704`; SHA-256 is `47eb0f3aee346f8b904cbb02eb7a770f8df679263cfa70c4f702501cdb31481d`. A complete package-only APK requires `--game-run`; omitting it produces only the diagnostic NativeActivity probe. This build includes the Java launcher/game activity, `classes.dex`, normal/large touch-layout migration profiles, the Vulkan `currentTransform` fix, and recent native changes. The ARM64 build and v3 signing verification passed; final device visual validation remains outstanding.
 
 ## Android behavior and limits
 

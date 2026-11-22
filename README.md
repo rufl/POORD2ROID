@@ -1,6 +1,6 @@
 # POORD2ROID — Diablo II: Resurrected no Android na Mali-G77 MC9 / Xiaomi 11T
 
-- [English version](README.en.md) · [Versão mais recente v0.7.3](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.3) · [Changelog](CHANGELOG.md) · [Matriz completa de drivers](docs/ANDROID_GPU_DRIVER.pt-BR.md) · [Código-fonte](https://github.com/rufl/POORD2ROID) · [Licenças e créditos](THIRD-PARTY-NOTICES.md)
+- [English version](README.en.md) · [Versão mais recente v0.7.4](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.4) · [Changelog](CHANGELOG.md) · [Matriz completa de drivers](docs/ANDROID_GPU_DRIVER.pt-BR.md) · [Código-fonte](https://github.com/rufl/POORD2ROID) · [Licenças e créditos](THIRD-PARTY-NOTICES.md)
 
 Port Android experimental para executar a versão de NS de **Diablo II: Resurrected** em dispositivos Android compatíveis. O projeto usa código ARM64 do jogo e implementa uma camada NVN→Vulkan; não é um emulador convencional.
 
@@ -16,12 +16,12 @@ O APK contém o launcher e o port, não os dados do jogo. Use o fluxo de importa
 
 ## Instalação e uso
 
-1. Obtenha o APK atual na [v0.7.3](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.3), consulte todas as [Releases](https://github.com/rufl/POORD2ROID/releases) ou construa-o conforme [`docs/BUILD_ON_WINDOWS.md`](docs/BUILD_ON_WINDOWS.md). Instale apenas um APK cuja origem e assinatura você confie.
+1. Obtenha o APK atual na [v0.7.4](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.4), consulte todas as [Releases](https://github.com/rufl/POORD2ROID/releases) ou construa-o conforme [`docs/BUILD_ON_WINDOWS.md`](docs/BUILD_ON_WINDOWS.md). Instale apenas um APK cuja origem e assinatura você confie.
 2. Abra o launcher e importe o pacote de dados preparado a partir dos seus próprios arquivos do jogo.
 3. Escolha **System Vulkan** primeiro. Teste drivers alternativos individualmente apenas se forem listados para o dispositivo.
 4. Inicie o jogo. Para problemas, consulte os logs descritos no guia de build e abra uma issue com modelo do aparelho, Android, GPU, driver selecionado e logs relevantes — nunca inclua chaves ou arquivos do jogo.
 
-A versão v0.7.3 corrige a rotação indevida da imagem Vulkan em dispositivos que reportam `ROTATE_90`, além das alterações da v0.7.2. O build ARM64 foi concluído, mas não havia dispositivo Android conectado para confirmação visual final; consulte o [changelog](CHANGELOG.md) para versão, tamanho e SHA-256.
+A versão v0.7.4 restaura o APK completo de package-only: launcher Java, atividade de jogo, `classes.dex` e os perfis normal/large de touch-layout, mantendo a correção de rotação Vulkan e os ajustes recentes. O build ARM64 foi concluído, mas não havia dispositivo Android conectado para confirmação visual final; consulte o [changelog](CHANGELOG.md) para versão, tamanho e SHA-256.
 
 O launcher oferece controles táteis e suporte a controles Android/HID. O GameSir G8+ não foi validado especificamente; seu funcionamento depende de como o Android o apresenta como controle compatível.
 

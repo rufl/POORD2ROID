@@ -2,6 +2,15 @@
 
 Release artifacts contain the Android port and launcher only. They do not contain game data, firmware, keys, saves, or protected game content.
 
+## [v0.7.4] — 2026-11-22
+
+### Complete Android package rebuild
+
+- Rebuilt the release as a package-only game APK with `--game-run`; v0.7.2 and v0.7.3 were accidentally published as the diagnostic NativeActivity probe because that flag was omitted.
+- Restored the complete launcher/game Java surface (`LauncherActivity`, `D2RActivity`, `classes.dex`) and both normal/large touch-layout migration profiles from the previously working v0.6.94 build.
+- Kept the current Vulkan `currentTransform` fix, ADPF changes, MaliSX2 0.5.1, PanVK r10, Display routing, and recent native performance work.
+- APK metadata is `versionName=0.7.4-android-port`, `versionCode=704`, size `42,594,860` bytes, SHA-256 `47eb0f3aee346f8b904cbb02eb7a770f8df679263cfa70c4f702501cdb31481d`. APK signing verification passed with v3. No Android device was connected for final visual confirmation.
+
 ## [v0.7.3] — 2026-11-21
 
 ### Android display orientation hotfix
@@ -51,6 +60,7 @@ Release artifacts contain the Android port and launcher only. They do not contai
 - Fix ADPF cycles being rejected solely because acquire and present run on different threads.
 - Keep the earliest acquire timestamp within a frame.
 
+[v0.7.4]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.4
 [v0.7.3]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.3
 [v0.7.2]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2
 [v0.7.1]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1
