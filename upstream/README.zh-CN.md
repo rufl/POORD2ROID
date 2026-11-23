@@ -13,7 +13,7 @@ English: [README.md](README.md) · Português (Brasil): [README.pt-BR.md](README
 1. `D2R-Android-port-v0.7.5.apk` —— 当前手机端应用。**不含游戏数据**，数据靠下面的包导入。
 2. `d2r-package-kit-<版本>.zip` —— Release 附带时使用的电脑端打包套件：源码（打包工具在里面）+ `d2r-package` 技能 + 上面那个 APK + 一页说明。未附带时使用本源码树与相同技能。
 
-v0.7.5 APK 的 `versionName` 为 `0.7.5-android-port`、`versionCode` 为 `705`，SHA-256 为 `2ef8b49537a43766877f0924d62d6cf247146b0d2c5f7c59373890a265423238`；这是完整的 package-only APK，包含 Java 启动器、游戏 Activity、`classes.dex` 以及 normal/large 触控布局迁移档案。Vulkan `preTransform` 已恢复为优先使用 `identity` 的早期行为；最终设备画面仍需确认。
+v0.7.6 APK 的 `versionName` 为 `0.7.6-android-port`、`versionCode` 为 `706`，SHA-256 为 `9e7a3be222a301da82364f456290afe68955a8593539b1e16799bcf3a955e7ea`；这是完整的 package-only APK，包含 Java 启动器、游戏 Activity、`classes.dex` 以及 normal/large 触控布局迁移档案。Vulkan `preTransform` 现在使用 `currentTransform`，把 framebuffer 与触控 overlay 对齐，使光标在界面与菜单中可见；仅在 `currentTransform` 不被支持时才回退到 `identity`。最终设备画面仍需确认。
 
 然后：
 

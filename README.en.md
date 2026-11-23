@@ -20,7 +20,7 @@ The APK contains the launcher and port, not game data. Use the import flow suppo
 3. Start with **System Vulkan**. Try alternative drivers one at a time and only when listed for your device.
 4. Launch the game. For failures, collect logs as described in the build guide and include device model, Android version, GPU, selected driver, and relevant logs in an issue. Never attach keys or game files.
 
-Release v0.7.5 corrects the Android surface orientation selection: the native game framebuffer now uses the earlier identity-preferred Vulkan `preTransform` behavior, with `currentTransform` only as fallback. It retains the complete package-only APK, Java launcher/game activity, `classes.dex`, normal/large touch-layout profiles, and recent native changes. No Android device was attached for final visual confirmation; version, size, and SHA-256 are recorded in the [changelog](CHANGELOG.md).
+Unreleased builds after v0.7.6 correct the Android surface orientation selection: `preTransform` now uses `currentTransform` so the game framebuffer, touch overlay, and cursor share one orientation, with `identity` only as the fallback when `currentTransform` is unsupported. The v0.7.6 package-only APK, Java launcher/game activity, `classes.dex`, normal/large touch-layout profiles, and recent native changes are retained. No Android device was attached for final visual confirmation; version, size, and SHA-256 are recorded in the [changelog](CHANGELOG.md).
 
 The launcher supports touch controls and Android/HID game controllers. The GameSir G8+ has not been specifically validated; operation depends on how Android exposes it as a compatible controller.
 

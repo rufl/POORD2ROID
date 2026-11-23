@@ -3,6 +3,7 @@
 Release artifacts contain the Android port and launcher only. They do not contain game data, firmware, keys, saves, or protected game content.
 
 ## Unreleased
+- Reverted the v0.7.6 Vulkan `preTransform` selection after device evidence showed the native game framebuffer rotated while the Android touch overlay remained upright in landscape. Restored the earlier working `currentTransform` behavior, with `identity` only as the fallback when identity is unsupported.
 
 - Android's native experience bar now scales and centers inside the bottom HUD groove; the generated 1320px layout places its ends at 1045–1735px inside the 1033–1747px container.
 - The in-game activity uses sticky immersive mode on creation, resume, and focus restoration to hide the system gesture handle while retaining swipe-to-reveal navigation. The launcher keeps its existing behavior.

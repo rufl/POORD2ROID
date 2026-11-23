@@ -13,7 +13,7 @@ Baixe a versão atual [v0.7.5](https://github.com/rufl/POORD2ROID/releases/tag/v
 
 O APK não contém jogo. Use o kit com um agente de código para preparar os dados localmente e instalar por ADB.
 
-O APK v0.7.5 usa `versionName=0.7.5-android-port`, `versionCode=705` e SHA-256 `2ef8b49537a43766877f0924d62d6cf247146b0d2c5f7c59373890a265423238`. É o package-only completo: contém launcher Java, atividade de jogo, `classes.dex` e os perfis normal/large de touch-layout. A seleção de `preTransform` Vulkan voltou ao comportamento anterior que prioriza `identity`; a confirmação visual final em dispositivo ainda é necessária.
+O APK v0.7.6 usa `versionName=0.7.6-android-port`, `versionCode=706` e SHA-256 `9e7a3be222a301da82364f456290afe68955a8593539b1e16799bcf3a955e7ea`. É o package-only completo: contém launcher Java, atividade de jogo, `classes.dex` e os perfis normal/large de touch-layout. A seleção de `preTransform` Vulkan agora usa `currentTransform` para alinhar o framebuffer ao overlay de toque e manter o cursor visível; `identity` é fallback apenas quando `currentTransform` não é suportado. A confirmação visual final em dispositivo ainda é necessária.
 
 ## Escolha do driver por GPU Mali
 

@@ -21,7 +21,7 @@ O APK contém o launcher e o port, não os dados do jogo. Use o fluxo de importa
 3. Escolha **System Vulkan** primeiro. Teste drivers alternativos individualmente apenas se forem listados para o dispositivo.
 4. Inicie o jogo. Para problemas, consulte os logs descritos no guia de build e abra uma issue com modelo do aparelho, Android, GPU, driver selecionado e logs relevantes — nunca inclua chaves ou arquivos do jogo.
 
-A versão v0.7.5 corrige a seleção da orientação da superfície Android: o framebuffer nativo do jogo volta ao comportamento Vulkan anterior que prioriza `identity`, usando `currentTransform` apenas como fallback. O APK completo de package-only, launcher/atividade Java, `classes.dex`, perfis normal/large de touch-layout e os ajustes nativos recentes foram mantidos. Não havia dispositivo Android conectado para confirmação visual final; versão, tamanho e SHA-256 estão no [changelog](CHANGELOG.md).
+Versões não publicadas após a v0.7.6 corrigem a seleção da orientação da superfície Android: `preTransform` agora usa `currentTransform` para alinhar o framebuffer nativo ao overlay de toque e manter o cursor visível nas telas e nos menus. O fallback de `identity` permanece apenas quando `currentTransform` não é suportado. O APK completo de package-only, launcher/atividade Java, `classes.dex`, perfis normal/large de touch-layout e os ajustes nativos recentes foram mantidos. Não havia dispositivo Android conectado para confirmação visual final; versão, tamanho e SHA-256 estão no [changelog](CHANGELOG.md).
 
 O launcher oferece controles táteis e suporte a controles Android/HID. O GameSir G8+ não foi validado especificamente; seu funcionamento depende de como o Android o apresenta como controle compatível.
 
