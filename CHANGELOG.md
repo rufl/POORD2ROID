@@ -2,12 +2,17 @@
 
 Release artifacts contain the Android port and launcher only. They do not contain game data, firmware, keys, saves, or protected game content.
 
-## Unreleased
-- Reverted the v0.7.6 Vulkan `preTransform` selection after device evidence showed the native game framebuffer rotated while the Android touch overlay remained upright in landscape. Restored the earlier working `currentTransform` behavior, with `identity` only as the fallback when identity is unsupported.
+## [v0.7.7] — 2026-11-24
 
-- Android's native experience bar now scales and centers inside the bottom HUD groove; the generated 1320px layout places its ends at 1045–1735px inside the 1033–1747px container.
-- The in-game activity uses sticky immersive mode on creation, resume, and focus restoration to hide the system gesture handle while retaining swipe-to-reveal navigation. The launcher keeps its existing behavior.
-- Bundled MaliSX2 was updated from 0.5.1 to 0.6.0 (`62d6d62423`); packaging verifies the upstream ZIP and `libvulkan_malisx2.so` SHA-256 values. PanVK r10 remains the latest JimVulkan release.
+### Android surface orientation fix
+
+- Restored `preTransform = cap.currentTransform` directly in `nvn_vulkan.c`, matching the shipped v0.7.3/v0.7.4 behavior and the non-Android path (`vulkan_front.c` already uses `capabilities.currentTransform`). v0.7.5/v0.7.6 preferred `identity`, which rotated the already-upright window-space blit a second time on `ROTATE_90` devices, pushing the cursor and options Display tab off the visible canvas.
+- `[vulkan-surface-transform]` log line prints supported/current/selected transform masks each session; `selected` now equals `current`.
+
+### Packaging
+
+- Complete `--game-run` package-only APK retained: Java launcher/game activity, `classes.dex`, normal/large touch-layout migration profiles, MaliSX2 0.6.0, PanVK r10, Turnip T30, ADPF changes, Display routing.
+- APK metadata is `versionName=0.7.7-android-port`, `versionCode=707`, size `43,020,844` bytes, SHA-256 `c01ced9d34b645bb975bf0089ca1eb2e095800feac97339cd9506e6015277ddc`. APK signing verification passed with v3; signer certificate SHA-256 `d4cbe1c8322c1a0491583888d674557c89cd1629118660a93ae9bd11d357baf8` matches v0.7.6, so installing over v0.7.6 keeps app data. No Android device was connected for final visual confirmation.
 
 
 
