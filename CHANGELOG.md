@@ -2,6 +2,18 @@
 
 Release artifacts contain the Android port and launcher only. They do not contain game data, firmware, keys, saves, or protected game content.
 
+## [v0.7.8] — 2026-11-24
+
+### Android landscape orientation + cursor fix
+
+- Reverted the v0.7.7 `preTransform = cap.currentTransform` selection. Device evidence: on `ROTATE_90` panels `currentTransform` rotated the already-upright window-space blit a second time, turning the landscape game portrait and pushing the stick-driven cursor and the options Display tab off the visible canvas. Restored the identity-preferred `preTransform` that shipped in v0.7.5, with `currentTransform` only as the fallback when identity is unsupported, so the frame, touch overlay, and cursor stay upright in landscape.
+- Kept the v0.7.6 and v0.7.7 changes intact: sticky immersive mode (Java `applyImmersiveMode` on create/resume/focus), MaliSX2 0.6.0, PanVK r10, Turnip T30, ADPF, Display routing, and the `[vulkan-surface-transform]` log line.
+
+### Packaging
+
+- Complete `--game-run` package-only APK retained: Java launcher/game activity, `classes.dex`, normal/large touch-layout migration profiles, MaliSX2 0.6.0, PanVK r10, Turnip T30, ADPF changes, Display routing.
+- APK metadata is `versionName=0.7.8-android-port`, `versionCode=708`, size `43,020,844` bytes, SHA-256 `e46d2e0a638e01aa8356db859587ed43679ff353325ae3c98eec33885efdbcfc`. APK signing verification passed with v3; signer certificate SHA-256 `d4cbe1c8322c1a0491583888d674557c89cd1629118660a93ae9bd11d357baf8` matches v0.7.6/v0.7.7, so installing over v0.7.7 keeps app data. Device visual confirmation of the landscape/cursor fix is pending.
+
 ## [v0.7.7] — 2026-11-24
 
 ### Android surface orientation fix
@@ -93,6 +105,9 @@ Release artifacts contain the Android port and launcher only. They do not contai
 - Keep the earliest acquire timestamp within a frame.
 
 [v0.7.5]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.5
+[v0.7.8]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.8
+[v0.7.7]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.7
+[v0.7.6]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.6
 [v0.7.4]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.4
 [v0.7.2]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.2
 [v0.7.1]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.1
