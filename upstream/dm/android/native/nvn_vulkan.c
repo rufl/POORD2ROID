@@ -173,6 +173,7 @@ static VkSurfaceKHR surface;
 static VkSwapchainKHR swapchain;
 static VkExtent2D screen_extent;
 static VkFormat screen_format;
+static int screen_color_attachment;
 static VkImage screen_black_image;
 static VkDeviceMemory screen_black_memory;
 enum { SCREEN_BLACK_UNAVAILABLE=-1, SCREEN_BLACK_EMPTY=0, SCREEN_BLACK_ALLOCATED=1, SCREEN_BLACK_READY=2 };
@@ -187,7 +188,10 @@ static VkSemaphore *screen_acquired, *screen_present_wait;
 static VkSemaphore screen_rendered;
 static uint64_t *screen_acquire_tickets;
 static uint32_t screen_acquire_slots, screen_acquire_slot;
-static int screen_submission;
+typedef enum { SCREEN_SUBMIT_GAME, SCREEN_SUBMIT_BLIT, SCREEN_SUBMIT_SHARPEN, SCREEN_SUBMIT_KIND_COUNT } screen_submit_kind;
+static screen_submit_kind screen_submission;
+// Completed timestamp spans, protected by queue_lock. These are not display times.
+static struct { uint64_t ns, count; } gpu_submit_spans[SCREEN_SUBMIT_KIND_COUNT];
 static uint32_t screen_count;
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -289,7 +293,11 @@ static void screen_create_swapchain(struct ANativeWindow *window) {
     // upright in landscape.
     VkSurfaceTransformFlagBitsKHR transform = (cap.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : cap.currentTransform;
     LOG("[vulkan-surface-transform] supported=%#x current=%#x selected=%#x extent=%ux%u upright_blit=1",cap.supportedTransforms,cap.currentTransform,transform,screen_extent.width,screen_extent.height);
-    VkSwapchainCreateInfoKHR ci = {.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, .surface = surface, .minImageCount = images, .imageFormat = format.format, .imageColorSpace = format.colorSpace, .imageExtent = screen_extent, .imageArrayLayers = 1, .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT, .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = transform, .compositeAlpha = alpha, .presentMode = VK_PRESENT_MODE_FIFO_KHR, .clipped = VK_TRUE};
+    screen_color_attachment = (cap.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (screen_color_attachment) usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    LOG("[vulkan-sharpen] surface_color_attachment=%d", screen_color_attachment);
+    VkSwapchainCreateInfoKHR ci = {.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, .surface = surface, .minImageCount = images, .imageFormat = format.format, .imageColorSpace = format.colorSpace, .imageExtent = screen_extent, .imageUsage = usage, .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = transform, .compositeAlpha = alpha, .presentMode = VK_PRESENT_MODE_FIFO_KHR, .clipped = VK_TRUE};
     VK_CHECK(vkCreateSwapchainKHR(device, &ci, NULL, &swapchain)); VK_CHECK(vkGetSwapchainImagesKHR(device, swapchain, &screen_count, NULL)); screen_images = calloc(screen_count, sizeof *screen_images); screen_initialized = calloc(screen_count, 1); if (!screen_images || !screen_initialized) die("Vulkan swapchain image allocation"); VK_CHECK(vkGetSwapchainImagesKHR(device, swapchain, &screen_count, screen_images));
     // present 消费完成由同一 image 的再次 acquire/wait 保证，不能用提交 fence 推断。
     // Reacquiring/waiting on the same image proves its present wait consumed; a submission fence does not.
@@ -388,6 +396,7 @@ static void screen_release(void) {
     if(screen_black_image)vkDestroyImage(device,screen_black_image,NULL);
     if(screen_black_memory)vkFreeMemory(device,screen_black_memory,NULL);
     screen_black_image=VK_NULL_HANDLE;screen_black_memory=VK_NULL_HANDLE;screen_black_state=SCREEN_BLACK_EMPTY;screen_format=VK_FORMAT_UNDEFINED;
+    screen_color_attachment = 0;
     if (screen_acquired) { for (uint32_t i = 0; i < screen_acquire_slots; i++) if (screen_acquired[i]) vkDestroySemaphore(device, screen_acquired[i], NULL); free(screen_acquired); screen_acquired = NULL; }
     if (screen_present_wait) { for (uint32_t i = 0; i < screen_count; i++) if (screen_present_wait[i]) vkDestroySemaphore(device, screen_present_wait[i], NULL); free(screen_present_wait); screen_present_wait = NULL; }
     free(screen_images); screen_images = NULL; free(screen_initialized); screen_initialized = NULL;
@@ -1369,11 +1378,8 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
         if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) die("Vulkan acquire: %d", result);
         if(index>=screen_count)die("Vulkan acquire image bounds");screen_rendered=screen_present_wait[index];
         uint64_t blit_phase=dm_cpu_phase_begin();
-        mtl_sub_begin();screen_black_record_init(); image_entry *e = image_get(t); image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT);
-        VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .oldLayout = screen_initialized[index] ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .image = screen_images[index], .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
-        // 首布局转换与 acquire 的 TRANSFER wait 相接，不越过显示引擎对 image 的使用。
-        // Connect the first layout transition to the acquire TRANSFER wait, after the presentation engine's image use.
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+        mtl_sub_begin();
+        image_entry *e = image_get(t);
         int rw=0,rh=0;
         int wide_gameplay=dm_uiscreen_ingame&&dm_screen_real&&dm_uiscreen_ingame()&&
             dm_screen_real(&rw,&rh)&&(int64_t)rw*9>(int64_t)rh*16;
@@ -1395,35 +1401,40 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
         if(changed)LOG("[vulkan-present-fit] opmode=%s active=%dx%d selected=%dx%d destination=%d,%d %dx%d scale=%.6f/%.6f aspect_error_ppm=%.1f",
             getenv("DM_OPMODE")?getenv("DM_OPMODE"):"unset",rw,rh,sw,sh,x,y,dw,dh,sw>0?(double)dw/sw:0.0,sh>0?(double)dh/sh:0.0,
             sw>0&&sh>0&&dw>0&&dh>0?((double)dw*sh/((double)dh*sw)-1.0)*1000000.0:0.0);
-        // 覆盖不全时，默认整屏清黑；A/B模式只用黑色1x1图像搬运未覆盖的边栏。
-        // Default mode clears partial coverage; the opt-in A/B mode blits a black 1x1 image into the unused bars.
-        if (x != 0 || y != 0 || dw != (int)screen_extent.width || dh != (int)screen_extent.height) {
-            int bar_blitted=0;
-            if(screen_bar_blit_enabled()&&screen_black_state==SCREEN_BLACK_READY){
-                VkImageBlit bars[4];unsigned count=screen_black_regions(bars,x,y,dw,dh);
-                if(count){vkCmdBlitImage(command,screen_black_image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,screen_images[index],
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,count,bars,VK_FILTER_NEAREST);present_bar_blit_done++;bar_blitted=1;}
+        int has_bars = x != 0 || y != 0 || dw != (int)screen_extent.width || dh != (int)screen_extent.height;
+        screen_submit_kind composition = SCREEN_SUBMIT_SHARPEN;
+        if (!sharpen_draw(e, index, has_bars, sx, sy, sw, sh, x, y, dw, dh)) {
+            composition = SCREEN_SUBMIT_BLIT;
+            screen_black_record_init();
+            image_access(e, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+            VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .oldLayout = screen_initialized[index] ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .image = screen_images[index], .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+            // Match the acquire wait stage before touching the acquired image.
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+            if (has_bars) {
+                int bar_blitted=0;
+                if(screen_bar_blit_enabled()&&screen_black_state==SCREEN_BLACK_READY){
+                    VkImageBlit bars[4];unsigned count=screen_black_regions(bars,x,y,dw,dh);
+                    if(count){vkCmdBlitImage(command,screen_black_image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,screen_images[index],
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,count,bars,VK_FILTER_NEAREST);present_bar_blit_done++;bar_blitted=1;}
+                }
+                if(!bar_blitted){
+                    VkClearColorValue black = {.float32 = {0,0,0,1}};
+                    vkCmdClearColorImage(command, screen_images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &barrier.subresourceRange);
+                    present_clear_done++;
+                    if(screen_bar_blit_enabled())present_bar_blit_fallback++;
+                }
+                VkMemoryBarrier clear_order = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT};
+                vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &clear_order, 0, NULL, 0, NULL);
+            } else {
+                present_clear_skipped++;
             }
-            if(!bar_blitted){
-                VkClearColorValue black = {.float32 = {0,0,0,1}};
-                vkCmdClearColorImage(command, screen_images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &barrier.subresourceRange);
-                present_clear_done++;
-                if(screen_bar_blit_enabled())present_bar_blit_fallback++;
-            }
-            VkMemoryBarrier clear_order = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT};
-            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &clear_order, 0, NULL, 0, NULL);
-        }
-        if (dm_sharpen_enabled() && sharpen_draw(command, e, screen_images[index], index,
-                                                 screen_extent.width, screen_extent.height,
-                                                 sx, sy, sw, sh, x, y, dw, dh)) {
-            // Sharpening pass completed; it owns the destination transition.
-        } else {
             VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}, .srcOffsets = {{sx,sy,0},{sx+sw,sy+sh,1}}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}, .dstOffsets = {{x,y,0},{x+dw,y+dh,1}}};
-            vkCmdBlitImage(command, e->image, VK_IMAGE_LAYOUT_GENERAL, screen_images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            vkCmdBlitImage(command, e->image, e->layout, screen_images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
             barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; barrier.dstAccessMask = 0; barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
         }
-        screen_submission = 1; completion_ticket=mtl_sub_commit(); screen_submission = 0;
+        screen_submission = composition;
+        completion_ticket = mtl_sub_commit();
         screen_acquire_tickets[acquire_slot]=completion_ticket;
         screen_acquire_slot=(acquire_slot+1)%screen_acquire_slots; screen_initialized[index] = 1;
         dm_cpu_phase_end(DM_CPU_PHASE_BLIT,blit_phase);
@@ -1458,17 +1469,34 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     pipeline_disk_poll();
     double current_gpu=gpu_total_ns,current_wait=fence_wait_total_ns;
     uint64_t ring_wait_snap=stability_ring_wait_ns,worker_publish_snap=stability_worker_publish_ns;
+    static uint64_t previous_ns[SCREEN_SUBMIT_KIND_COUNT], previous_count[SCREEN_SUBMIT_KIND_COUNT];
+    uint64_t span_ns[SCREEN_SUBMIT_KIND_COUNT], span_count[SCREEN_SUBMIT_KIND_COUNT];
+    if (diag && (ticket == 1 || ticket % 60 == 0)) {
+        for (unsigned i = 0; i < SCREEN_SUBMIT_KIND_COUNT; ++i) {
+            span_ns[i] = gpu_submit_spans[i].ns - previous_ns[i];
+            span_count[i] = gpu_submit_spans[i].count - previous_count[i];
+            previous_ns[i] = gpu_submit_spans[i].ns;
+            previous_count[i] = gpu_submit_spans[i].count;
+        }
+    }
     static uint64_t driver_fast_previous,driver_build_previous,driver_bytes_previous,driver_clear_previous;
     if(diag&&(ticket==1||ticket%60==0)){if(ticket!=1){unsigned frames=ticket==60?59:60;
         LOG("[vulkan-driver-table] frame=%llu fast_hits/frame=%.1f builds/frame=%.1f avoided_table_MiB/frame=%.3f avoided_clear_MiB/frame=%.3f",(unsigned long long)ticket,(uniform_driver_fast_hits-driver_fast_previous)/(double)frames,(uniform_driver_builds-driver_build_previous)/(double)frames,(uniform_driver_avoided_bytes-driver_bytes_previous)/(frames*1048576.),(uniform_clear_avoided_bytes-driver_clear_previous)/(frames*1048576.));}
         driver_fast_previous=uniform_driver_fast_hits;driver_build_previous=uniform_driver_builds;driver_bytes_previous=uniform_driver_avoided_bytes;driver_clear_previous=uniform_clear_avoided_bytes;}
     pthread_mutex_unlock(&queue_lock);
+    if (diag && ticket % 60 == 0) {
+        unsigned frames = ticket == 60 ? 59 : 60;
+        LOG("[vulkan-present-gpu] frame=%llu scene_ms/frame=%.3f blit_submits=%llu blit_ms/submit=%.3f sharpen_submits=%llu sharpen_ms/submit=%.3f scope=completed_timestamp_spans_not_display",
+            (unsigned long long)ticket, span_count[SCREEN_SUBMIT_GAME] ? span_ns[SCREEN_SUBMIT_GAME]/(frames*1e6) : -1.0,
+            (unsigned long long)span_count[SCREEN_SUBMIT_BLIT], span_count[SCREEN_SUBMIT_BLIT] ? span_ns[SCREEN_SUBMIT_BLIT]/(span_count[SCREEN_SUBMIT_BLIT]*1e6) : -1.0,
+            (unsigned long long)span_count[SCREEN_SUBMIT_SHARPEN], span_count[SCREEN_SUBMIT_SHARPEN] ? span_ns[SCREEN_SUBMIT_SHARPEN]/(span_count[SCREEN_SUBMIT_SHARPEN]*1e6) : -1.0);
+    }
     if(ticket==1){perf_time=now;perf_submit=atomic_load(&submitted);perf_bytes=snapshot_bytes;perf_allocations=buffer_allocations;perf_hits=read_cache_hits;perf_create_wall=buffer_create_wall_ns;perf_create_cpu=buffer_create_cpu_ns;}
     else if(ticket%60==0){unsigned frames=ticket==60?59:60;dm_cpu_phase_report(frames);LOG("[vulkan-perf] frame=%llu fps=%.2f submits/frame=%.1f snapshots/frame=%.1f MB allocations/frame=%.1f new_buf_wall_ms/frame=%.3f new_buf_cpu_ms/frame=%.3f vertex_hits=%llu cache=%llu MB",(unsigned long long)ticket,frames*1e9/(now-perf_time),(double)(atomic_load(&submitted)-perf_submit)/frames,(double)(snapshot_bytes-perf_bytes)/(frames*1048576.),(double)(buffer_allocations-perf_allocations)/frames,(double)(buffer_create_wall_ns-perf_create_wall)/(frames*1e6),(double)(buffer_create_cpu_ns-perf_create_cpu)/(frames*1e6),(unsigned long long)(read_cache_hits-perf_hits),(unsigned long long)(read_cache_bytes>>20));perf_time=now;perf_submit=atomic_load(&submitted);perf_bytes=snapshot_bytes;perf_allocations=buffer_allocations;perf_hits=read_cache_hits;perf_create_wall=buffer_create_wall_ns;perf_create_cpu=buffer_create_cpu_ns;}
     if(ticket==1){perf_gpu=current_gpu;perf_wait=current_wait;perf_clear_done=present_clear_done;perf_clear_skipped=present_clear_skipped;perf_bar_blit_done=present_bar_blit_done;perf_bar_blit_fallback=present_bar_blit_fallback;}
     else if(ticket%60==0){
         unsigned frames=ticket==60?59:60;
-        LOG("[vulkan-time] frame=%llu GPU=%.2f ms/frame fence_wait=%.2f ms/frame present_clear done/skipped=%.1f/%.1f present_bar_blit done/fallback=%.1f/%.1f mode=%s (GPU chunk spans; exclude present/vsync)",
+        LOG("[vulkan-time] frame=%llu GPU=%.2f ms/frame fence_wait=%.2f ms/frame present_clear done/skipped=%.1f/%.1f present_bar_blit done/fallback=%.1f/%.1f mode=%s (GPU chunk spans include composition; exclude display timing)",
             (unsigned long long)ticket,batch_times?(current_gpu-perf_gpu)/(frames*1e6):-1,(current_wait-perf_wait)/(frames*1e6),
             (double)(present_clear_done-perf_clear_done)/(double)frames,(double)(present_clear_skipped-perf_clear_skipped)/(double)frames,
             (double)(present_bar_blit_done-perf_bar_blit_done)/(double)frames,(double)(present_bar_blit_fallback-perf_bar_blit_fallback)/(double)frames,

@@ -49,6 +49,7 @@ typedef struct async_batch {
     post_op *posts,*copies;
     dm_pending_ranges pending_ranges;
     uint64_t guest_frame;
+    screen_submit_kind screen_kind;
     uint64_t ticket,temporary_base;
     uintptr_t known_copy_low,known_copy_high;
     uintptr_t copy_low,copy_high;
@@ -419,6 +420,8 @@ static void async_publish_locked(async_batch *batch) {
         for(unsigned c=0;c<batch->chunk_timestamps;c++)
             batch_gpu_ns+=(uint64_t)(timestamp_delta(times[2*c],times[2*c+1],gpu_timestamp_bits)*gpu_timestamp_period);
         gpu_total_ns+=batch_gpu_ns;
+        gpu_submit_spans[batch->screen_kind].ns += batch_gpu_ns;
+        gpu_submit_spans[batch->screen_kind].count++;
         gpu_frame_entry *gfe=&gpu_frame_ring[batch->guest_frame&15u];
         if(!gfe->valid||gfe->frame!=batch->guest_frame){gfe->valid=1;gfe->frame=batch->guest_frame;gfe->ns=batch_gpu_ns;}
         else gfe->ns+=batch_gpu_ns;
@@ -592,7 +595,8 @@ static uint64_t async_commit_locked(void) {
 #endif
     VK_CHECK(vkResetFences(device,1,&batch->fence));
     VkSubmitInfo submit={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&batch->command};
-    VkPipelineStageFlags present_stage=VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkPipelineStageFlags present_stage = screen_submission == SCREEN_SUBMIT_SHARPEN
+        ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT;
     if(screen_submission){
         if(!screen_acquired||screen_acquire_slot>=screen_acquire_slots||!screen_acquired[screen_acquire_slot])die("Vulkan present acquire semaphore state");
         submit.waitSemaphoreCount=1;submit.pWaitSemaphores=&screen_acquired[screen_acquire_slot];submit.pWaitDstStageMask=&present_stage;submit.signalSemaphoreCount=1;submit.pSignalSemaphores=&screen_rendered;
@@ -601,13 +605,14 @@ static uint64_t async_commit_locked(void) {
     reference_gate_submit(&submit);
 #endif
     batch->guest_frame=atomic_load(&guest_frame_index);
+    batch->screen_kind = screen_submission;
     uint64_t ticket=atomic_fetch_add(&submitted,1)+1;
     pthread_mutex_lock(&vk_queue_lock);VK_CHECK(vkQueueSubmit(queue,1,&submit,batch->fence));pthread_mutex_unlock(&vk_queue_lock);
     async_logical_submits++;
     batch->posts=post_first;batch->copies=post_copy_first;batch->host_sync=pending_host_sync;batch->query_count=used_queries;batch->ticket=ticket;batch->status=ASYNC_PENDING;batch->next=NULL;
     if(async_last)async_last->next=batch;else async_first=batch;async_last=batch;
     post_first=post_copy_first=NULL;post_tail=&post_first;post_copy_tail=&post_copy_first;pending_host_sync=0;
-    recording=0;screen_submission=0;async_current=NULL;
+    recording=0;screen_submission=SCREEN_SUBMIT_GAME;async_current=NULL;
     pthread_cond_signal(&async_condition);return ticket;
 }
 

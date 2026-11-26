@@ -7,7 +7,7 @@
 static VkDescriptorSetLayout sharpen_set_layout;
 static VkPipelineLayout sharpen_pipeline_layout;
 static VkPipeline sharpen_pipeline;
-static VkRenderPass sharpen_render_pass;
+static VkRenderPass sharpen_render_passes[2]; // Full coverage, then letterboxed.
 static int sharpen_ready;
 static VkSampler sharpen_sampler;
 static VkDescriptorPool sharpen_desc_pool;
@@ -20,12 +20,10 @@ struct sharpen_push {
     float src_rect[4];
     float dst_rect[4];
 };
-static VkDescriptorSet sharpen_desc_set;
+static VkDescriptorSet sharpen_desc_sets[DM_VK_BATCH_SLOTS];
 static VkImageView *sharpen_dst_views;
 static VkFramebuffer *sharpen_framebuffers;
 static uint32_t sharpen_framebuffer_count;
-static VkExtent2D sharpen_framebuffer_extent;
-static VkFormat sharpen_framebuffer_format;
 
 static void sharpen_swapchain_cleanup(void) {
     if (sharpen_framebuffers) {
@@ -41,17 +39,10 @@ static void sharpen_swapchain_cleanup(void) {
     sharpen_framebuffers = NULL;
     sharpen_dst_views = NULL;
     sharpen_framebuffer_count = 0;
-    sharpen_framebuffer_extent = (VkExtent2D){0, 0};
-    sharpen_framebuffer_format = VK_FORMAT_UNDEFINED;
 }
 
 static int sharpen_swapchain_prepare(void) {
     if (!screen_images || !screen_count) return 0;
-    if (sharpen_framebuffers && sharpen_framebuffer_count == screen_count &&
-        sharpen_framebuffer_extent.width == screen_extent.width &&
-        sharpen_framebuffer_extent.height == screen_extent.height &&
-        sharpen_framebuffer_format == screen_format) return 1;
-    sharpen_swapchain_cleanup();
     sharpen_dst_views = calloc(screen_count, sizeof *sharpen_dst_views);
     sharpen_framebuffers = calloc(screen_count, sizeof *sharpen_framebuffers);
     if (!sharpen_dst_views || !sharpen_framebuffers) {
@@ -74,7 +65,7 @@ static int sharpen_swapchain_prepare(void) {
         }
         VkFramebufferCreateInfo fb_info = {
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .renderPass = sharpen_render_pass,
+            .renderPass = sharpen_render_passes[0],
             .attachmentCount = 1,
             .pAttachments = &sharpen_dst_views[i],
             .width = screen_extent.width,
@@ -87,9 +78,6 @@ static int sharpen_swapchain_prepare(void) {
             return 0;
         }
     }
-    sharpen_framebuffer_count = screen_count;
-    sharpen_framebuffer_extent = screen_extent;
-    sharpen_framebuffer_format = screen_format;
     return 1;
 }
 
@@ -124,14 +112,14 @@ static void sharpen_prepare(void) {
     result = vkCreateDescriptorSetLayout(device, &set_info, NULL, &sharpen_set_layout);
     if (result != VK_SUCCESS) goto failed;
     
-    // Create descriptor pool (1 set with 1 combined image sampler)
+    // The selected batch slot is recycled only after its fence completes.
     VkDescriptorPoolSize pool_size = {
         .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = 4  // Allow a few sets
+        .descriptorCount = DM_VK_BATCH_SLOTS
     };
     VkDescriptorPoolCreateInfo pool_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = 4,
+        .maxSets = DM_VK_BATCH_SLOTS,
         .poolSizeCount = 1,
         .pPoolSizes = &pool_size
     };
@@ -176,15 +164,16 @@ static void sharpen_prepare(void) {
         goto failed;
     }
     
-    // Preserve the cleared/bar-blitted pixels outside the destination rectangle.
+    // Never read swapchain contents. Clear the bars in the pass only when the draw
+    // does not cover the surface; the two load ops are render-pass compatible.
     VkAttachmentDescription color_attachment = {
         .format = screen_format,
         .samples = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
         .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
     };
     VkAttachmentReference color_ref = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -193,14 +182,13 @@ static void sharpen_prepare(void) {
         .colorAttachmentCount = 1,
         .pColorAttachments = &color_ref
     };
-    // Subpass dependency for the preceding transfer clear/bar blit.
+    // Scope the implicit swapchain layout transition after the acquire semaphore.
     VkSubpassDependency dependency = {
         .srcSubpass = VK_SUBPASS_EXTERNAL,
         .dstSubpass = 0,
-        .srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
         .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
     };
     VkRenderPassCreateInfo render_pass_info = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
@@ -211,7 +199,11 @@ static void sharpen_prepare(void) {
         .dependencyCount = 1,
         .pDependencies = &dependency
     };
-    result = vkCreateRenderPass(device, &render_pass_info, NULL, &sharpen_render_pass);
+    result = vkCreateRenderPass(device, &render_pass_info, NULL, &sharpen_render_passes[0]);
+    if (result == VK_SUCCESS) {
+        color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        result = vkCreateRenderPass(device, &render_pass_info, NULL, &sharpen_render_passes[1]);
+    }
     if (result != VK_SUCCESS) {
         vkDestroyShaderModule(device, vert_module, NULL);
         vkDestroyShaderModule(device, frag_module, NULL);
@@ -294,7 +286,7 @@ static void sharpen_prepare(void) {
         .pColorBlendState = &color_blend,
         .pDynamicState = &dynamic_state,
         .layout = sharpen_pipeline_layout,
-        .renderPass = sharpen_render_pass,
+        .renderPass = sharpen_render_passes[0],
         .subpass = 0
     };
     
@@ -302,33 +294,28 @@ static void sharpen_prepare(void) {
     vkDestroyShaderModule(device, vert_module, NULL);
     vkDestroyShaderModule(device, frag_module, NULL);
     if (result != VK_SUCCESS) goto failed;
+    VkDescriptorSetLayout layouts[DM_VK_BATCH_SLOTS];
+    for (unsigned i = 0; i < DM_VK_BATCH_SLOTS; ++i) layouts[i] = sharpen_set_layout;
     VkDescriptorSetAllocateInfo descriptor_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .descriptorPool = sharpen_desc_pool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &sharpen_set_layout
+        .descriptorSetCount = DM_VK_BATCH_SLOTS,
+        .pSetLayouts = layouts
     };
-    result = vkAllocateDescriptorSets(device, &descriptor_info, &sharpen_desc_set);
+    result = vkAllocateDescriptorSets(device, &descriptor_info, sharpen_desc_sets);
     if (result != VK_SUCCESS) goto failed;
+    if (!sharpen_swapchain_prepare()) {
+        result = VK_ERROR_INITIALIZATION_FAILED;
+        goto failed;
+    }
     
     sharpen_ready = 1;
     LOG("[vulkan-sharpen] ready");
     return;
     
 failed:
-    if (sharpen_pipeline) vkDestroyPipeline(device, sharpen_pipeline, NULL);
-    if (sharpen_pipeline_layout) vkDestroyPipelineLayout(device, sharpen_pipeline_layout, NULL);
-    if (sharpen_render_pass) vkDestroyRenderPass(device, sharpen_render_pass, NULL);
-    if (sharpen_set_layout) vkDestroyDescriptorSetLayout(device, sharpen_set_layout, NULL);
-    if (sharpen_desc_pool) vkDestroyDescriptorPool(device, sharpen_desc_pool, NULL);
-    if (sharpen_sampler) vkDestroySampler(device, sharpen_sampler, NULL);
-    sharpen_pipeline = VK_NULL_HANDLE;
-    sharpen_pipeline_layout = VK_NULL_HANDLE;
-    sharpen_render_pass = VK_NULL_HANDLE;
-    sharpen_set_layout = VK_NULL_HANDLE;
-    sharpen_desc_pool = VK_NULL_HANDLE;
-    sharpen_sampler = VK_NULL_HANDLE;
-    sharpen_desc_set = VK_NULL_HANDLE;
+    sharpen_cleanup();
+    sharpen_ready = -1;
     LOG("[vulkan-sharpen] init failed VkResult=%d", (int)result);
 }
 
@@ -336,17 +323,18 @@ static void sharpen_cleanup(void) {
     sharpen_swapchain_cleanup();
     if (sharpen_pipeline) vkDestroyPipeline(device, sharpen_pipeline, NULL);
     if (sharpen_pipeline_layout) vkDestroyPipelineLayout(device, sharpen_pipeline_layout, NULL);
-    if (sharpen_render_pass) vkDestroyRenderPass(device, sharpen_render_pass, NULL);
+    for (unsigned i = 0; i < 2; ++i) {
+        if (sharpen_render_passes[i]) vkDestroyRenderPass(device, sharpen_render_passes[i], NULL);
+        sharpen_render_passes[i] = VK_NULL_HANDLE;
+    }
     if (sharpen_set_layout) vkDestroyDescriptorSetLayout(device, sharpen_set_layout, NULL);
     if (sharpen_desc_pool) vkDestroyDescriptorPool(device, sharpen_desc_pool, NULL);
     if (sharpen_sampler) vkDestroySampler(device, sharpen_sampler, NULL);
     sharpen_pipeline = VK_NULL_HANDLE;
     sharpen_pipeline_layout = VK_NULL_HANDLE;
-    sharpen_render_pass = VK_NULL_HANDLE;
     sharpen_set_layout = VK_NULL_HANDLE;
     sharpen_desc_pool = VK_NULL_HANDLE;
     sharpen_sampler = VK_NULL_HANDLE;
-    sharpen_desc_set = VK_NULL_HANDLE;
     sharpen_ready = 0;
 }
 
@@ -385,67 +373,43 @@ static int sharpen_adaptive_bypass(void) {
     return bypass;
 }
 
-// Called from present path when dm_sharpen_enabled() is true
-// Replaces the vkCmdBlitImage at line ~1414
-// src_image: 3D render target (e->image)
-// dst_image: swapchain image (screen_images[index])
-// src_rect: sx, sy, sw, sh in source image coordinates
-// dst_rect: x, y, dw, dh in destination image coordinates
-static int sharpen_draw(VkCommandBuffer command, image_entry *src_image, VkImage dst_image,
-                        uint32_t dst_index, uint32_t dst_width, uint32_t dst_height,
+// Return false before recording any filter commands if the linear blit is needed.
+static int sharpen_draw(image_entry *src_image, uint32_t dst_index, int has_bars,
                         int sx, int sy, int sw, int sh,
                         int dx, int dy, int dw, int dh) {
-    if (!dm_sharpen_enabled()) return 0;
-    if (sharpen_adaptive_bypass()) return 0;
-    sharpen_prepare();
-    
-    float strength = 0.0f;
-    int radius = 1;
-    float threshold = 0.0f;
+    float strength, threshold;
+    int radius;
     dm_sharpen_get(&strength, &radius, &threshold);
-    if (strength <= 0.0f) return 0;
-    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return 0;
-    if (!sharpen_swapchain_prepare() || dst_index >= sharpen_framebuffer_count ||
-        screen_images[dst_index] != dst_image) return 0;
+    if (strength <= 0.0f || !screen_color_attachment || sharpen_adaptive_bypass()) return 0;
+    sharpen_prepare();
+    if (sharpen_ready != 1) return 0;
 
     VkImageSubresourceRange source_range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkImageView src_view = image_view_get(src_image, VK_IMAGE_VIEW_TYPE_2D, source_range);
+    image_access(src_image, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    VkDescriptorSet descriptor = sharpen_desc_sets[batch_resource_selected];
     VkDescriptorImageInfo src_image_info = {
         .sampler = sharpen_sampler,
         .imageView = src_view,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        .imageLayout = src_image->layout
     };
     VkWriteDescriptorSet write = {
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = sharpen_desc_set,
+        .dstSet = descriptor,
         .dstBinding = 0,
         .descriptorCount = 1,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .pImageInfo = &src_image_info
     };
     vkUpdateDescriptorSets(device, 1, &write, 0, NULL);
-    // Transition source image only after all fallback-prone resource creation succeeds.
-    VkImageMemoryBarrier src_barrier = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = src_image->image,
-        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
-    };
-    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &src_barrier);
-    
-    // Begin render pass
+    const VkClearValue black = {.color.float32 = {0, 0, 0, 1}};
     VkRenderPassBeginInfo rp_begin = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-        .renderPass = sharpen_render_pass,
+        .renderPass = sharpen_render_passes[has_bars],
         .framebuffer = sharpen_framebuffers[dst_index],
-        .renderArea = {{0, 0}, {dst_width, dst_height}},
-        .clearValueCount = 0,
-        .pClearValues = NULL
+        .renderArea = {{0, 0}, screen_extent},
+        .clearValueCount = has_bars,
+        .pClearValues = has_bars ? &black : NULL
     };
     vkCmdBeginRenderPass(command, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
     
@@ -469,7 +433,7 @@ static int sharpen_draw(VkCommandBuffer command, image_entry *src_image, VkImage
     vkCmdSetScissor(command, 0, 1, &scissor);
     
     // Bind descriptor set
-    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, sharpen_pipeline_layout, 0, 1, &sharpen_desc_set, 0, NULL);
+    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, sharpen_pipeline_layout, 0, 1, &descriptor, 0, NULL);
     
     // Push constants
     struct sharpen_push push = {

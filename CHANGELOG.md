@@ -1,6 +1,17 @@
 # Changelog
 
 Release artifacts contain the Android port and launcher only. They do not contain game data, firmware, keys, saves, or protected game content.
+
+## [v0.7.9.1] — 2026-11-26
+
+### Android Vulkan
+
+- Request color-attachment swapchain images only when supported, and use the corresponding acquire semaphore stage for sharpening. Give each fenced submission slot its own descriptor set and track the source image access through the shared layout code.
+- Scale and sharpen in one render pass without loading old swapchain contents. Clear letterbox bars inside that pass, and retain the linear-blit path when sharpening is off, bypassed, or unavailable.
+- Report completed GPU spans for scene work, linear blit, and sharpening separately in Diagnostics.
+- APK metadata: `versionName=0.7.9.1-android-port`, `versionCode=709`, size `42,123,820` bytes, SHA-256 `29c7a1e440cdf2f0667b52b92f8dbf6237091951e475061f3de8c44c4eb0ee83`. Same signing certificate as v0.7.9; install over it without reimporting game data.
+- ARM64 build and APK v3 signature verified. The 70% render-scale comparison with sharpening off and at 0.1 has not been run on the Xiaomi 11T.
+
 ## [v0.7.9] — 2026-11-26
 
 ### Android Vulkan performance
@@ -124,6 +135,7 @@ Release artifacts contain the Android port and launcher only. They do not contai
 - Keep the earliest acquire timestamp within a frame.
 
 [v0.7.5]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.5
+[v0.7.9.1]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.9.1
 [v0.7.9]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.9
 [v0.7.8]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.8
 [v0.7.7]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.7
