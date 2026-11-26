@@ -1,6 +1,19 @@
 # Changelog
 
 Release artifacts contain the Android port and launcher only. They do not contain game data, firmware, keys, saves, or protected game content.
+## [v0.7.9] — 2026-11-26
+
+### Android Vulkan performance
+
+- Hardened the adaptive sharpening fallback: after GPU overload it stays bypassed for 10 seconds and requires 3 seconds at or below 18 ms before resuming.
+- Expanded the bounded host-visible buffer cache eligibility from 8 MiB to 16 MiB while retaining the 64 MiB LRU cap, reducing repeated allocations during texture and snapshot streaming without increasing the cache budget.
+- Audited render-pass reuse: compatible identical attachment/framebuffer keys remain coalesced, while image-layout and write hazards still close passes explicitly instead of using unsafe broad merging.
+
+### Packaging
+
+- Complete `--game-run` package-only APK retained with MaliSX2 0.6.1, PanVK r10, Turnip v27.0.0-20261126, touch-layout migration profiles, transparent FPS overlay, and adaptive sharpening.
+- APK metadata is `versionName=0.7.9-android-port`, `versionCode=709`, size `42,123,820` bytes, SHA-256 `dad486b90b46f0e6bc44155da05dd895ff98b553f72801d88885c31bd0268960`. APK signing uses the v0.7.8 certificate `4832e0a9…`.
+
 
 ## [v0.7.8] — 2026-11-26
 
@@ -13,6 +26,7 @@ Release artifacts contain the Android port and launcher only. They do not contai
 - Fixed Android startup parsing for the Java-persisted `handheld_`/`console_` sharpening keys. The previous build rejected `sharpen_preset` as an unknown launch setting before the game could start.
 - Reduced the sharpening fragment pass to the direction whose result is actually used, removing discarded texture samples that amplified GPU stalls during camera movement while preserving the current output for every radius.
 - Hardened the GPU-budgeted sharpening fallback: after bypassing above 30 ms, it stays off for 10 seconds and requires 3 seconds at or below 18 ms before resuming, preventing scene-transition spikes from immediately reintroducing stutters.
+- Expanded the bounded host-visible buffer cache eligibility from 8 MiB to 16 MiB while retaining the 64 MiB LRU cap, reducing repeated Vulkan memory allocations during texture and snapshot streaming without increasing the cache budget.
 
 ### Packaging
 
@@ -110,6 +124,7 @@ Release artifacts contain the Android port and launcher only. They do not contai
 - Keep the earliest acquire timestamp within a frame.
 
 [v0.7.5]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.5
+[v0.7.9]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.9
 [v0.7.8]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.8
 [v0.7.7]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.7
 [v0.7.6]: https://github.com/rufl/POORD2ROID/releases/tag/v0.7.6

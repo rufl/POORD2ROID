@@ -45,7 +45,7 @@ typedef struct buffer_owner {
     struct buffer_owner *bucket_prev, *bucket_next, *lru_prev, *lru_next;
 } buffer_owner;
 typedef struct { VkBuffer buffer; VkDeviceMemory memory; void *mapped; uint64_t size, capacity; buffer_owner *owner; } vk_buffer;
-enum { BUFFER_CACHE_MIN_SHIFT = 12, BUFFER_CACHE_MAX_SHIFT = 23, BUFFER_CACHE_BUCKETS = 12 };
+enum { BUFFER_CACHE_MIN_SHIFT = 12, BUFFER_CACHE_MAX_SHIFT = 24, BUFFER_CACHE_BUCKETS = 13 };
 static buffer_owner *buffer_cache_buckets[BUFFER_CACHE_BUCKETS];
 static buffer_owner *buffer_lru_head, *buffer_lru_tail;
 static pthread_mutex_t buffer_cache_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -698,7 +698,7 @@ static vk_buffer buffer_create(uint64_t size) {
     // 每次新建或缓存复用都有唯一版本，句柄/owner 地址重用不会命中旧数据的派生缓存。
     // Give each allocation or cache reuse a unique activation so reused handles/owners cannot match stale derived data.
     uint64_t activation=++buffer_activation;if(!activation)die("Vulkan buffer activation overflow");
-    if (capacity <= (8u << 20)) {
+    if (capacity <= (16u << 20)) {
         unsigned bucket = buffer_cache_bucket_index(capacity);
         buffer_owner *owner = buffer_cache_buckets[bucket];
         if (owner) {
@@ -744,7 +744,7 @@ static void buffer_destroy(vk_buffer *b) {
     // GPU 完成后才归还快照；按 LRU 驱逐冷尺寸槽并保持 64 MiB 上限，不复用仍在执行的缓冲。
     // Return snapshots only after GPU completion; evict cold LRU entries to stay within 64 MiB and never reuse in-flight buffers.
     pthread_mutex_lock(&buffer_cache_lock); active_buffer_bytes -= b->capacity;
-    if (b->capacity <= (8u << 20)) {
+    if (b->capacity <= (16u << 20)) {
         buffer_owner *evict = NULL;
         while (buffer_lru_tail && buffer_cache_bytes + b->capacity > (64u << 20)) {
             buffer_owner *victim = buffer_lru_tail;
