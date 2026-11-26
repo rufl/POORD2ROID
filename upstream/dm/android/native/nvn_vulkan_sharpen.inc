@@ -351,18 +351,32 @@ static void sharpen_cleanup(void) {
 }
 
 // Keep the user's sharpening selection, but temporarily use the existing linear blit when
-// the previous GPU window is already above the frame budget. Hysteresis prevents toggling.
+// the previous GPU window is overloaded. Require sustained headroom before resuming.
 static int sharpen_adaptive_bypass(void) {
     static int bypass;
     static int logged = -1;
+    static uint64_t bypass_until;
+    static uint64_t headroom_since;
     dm_android_debug_stats stats;
     pthread_mutex_lock(&debug_lock);
     stats = debug_stats;
     pthread_mutex_unlock(&debug_lock);
+    uint64_t now = dm_android_clock_ns(CLOCK_MONOTONIC);
     if (stats.gpu_valid && stats.gpu_ms > 0.0) {
-        double next = bypass ? 24.0 : 30.0;
-        if ((bypass && stats.gpu_ms <= next) || (!bypass && stats.gpu_ms >= next))
-            bypass = !bypass;
+        if (!bypass && stats.gpu_ms >= 30.0) {
+            bypass = 1;
+            bypass_until = now + 10ull * 1000000000ull;
+            headroom_since = 0;
+        } else if (bypass) {
+            if (now < bypass_until || stats.gpu_ms > 18.0) {
+                headroom_since = 0;
+            } else if (!headroom_since) {
+                headroom_since = now;
+            } else if (now - headroom_since >= 3ull * 1000000000ull) {
+                bypass = 0;
+                headroom_since = 0;
+            }
+        }
     }
     if (logged != bypass) {
         LOG("[vulkan-sharpen] adaptive=%s gpu_ms=%.2f", bypass ? "bypass" : "on", stats.gpu_ms);

@@ -12,12 +12,12 @@ Release artifacts contain the Android port and launcher only. They do not contai
 - Refreshed bundled drivers to MaliSX2 0.6.1 and Mesa Turnip v27.0.0-20261126. PanVK r10 was already the latest pinned release and remains unchanged.
 - Fixed Android startup parsing for the Java-persisted `handheld_`/`console_` sharpening keys. The previous build rejected `sharpen_preset` as an unknown launch setting before the game could start.
 - Reduced the sharpening fragment pass to the direction whose result is actually used, removing discarded texture samples that amplified GPU stalls during camera movement while preserving the current output for every radius.
-- Added a GPU-budgeted sharpening fallback with 30/24 ms hysteresis: when the previous GPU window is overloaded, the selected sharpening profile temporarily uses the existing linear blit to avoid movement stutters, then automatically resumes below budget.
+- Hardened the GPU-budgeted sharpening fallback: after bypassing above 30 ms, it stays off for 10 seconds and requires 3 seconds at or below 18 ms before resuming, preventing scene-transition spikes from immediately reintroducing stutters.
 
 ### Packaging
 
 - Complete `--game-run` package-only APK retained: Java launcher/game activity, `classes.dex`, normal/large touch-layout migration profiles, MaliSX2 0.6.1, PanVK r10, Turnip v27.0.0-20261126, and sharpening support.
-- APK metadata is `versionName=0.7.8-android-port`, `versionCode=708`, size `42,123,820` bytes, SHA-256 `0cb772bdb0f28ed64daa9c5382ba484185d6cef31028d5f40655ddda6e22d031`. APK signing uses the v0.7.8 certificate `4832e0a9…`; v0.7.7 remains signed by `d4cbe1c8…`.
+- APK metadata is `versionName=0.7.8-android-port`, `versionCode=708`, size `42,123,820` bytes, SHA-256 `70c5dd20f9cc19283c8e726a65415764df778b4f68511655018a685c4e79d9c7`. APK signing uses the v0.7.8 certificate `4832e0a9…`; v0.7.7 remains signed by `d4cbe1c8…`.
 
 ## [v0.7.7] — 2026-11-24
 
