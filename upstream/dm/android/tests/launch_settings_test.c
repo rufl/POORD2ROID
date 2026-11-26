@@ -283,6 +283,14 @@ static void quality_preset_settings(void) {
     result = apply_ok(temporary);
     assert(result.operation_mode == 1 && result.quality_preset == 2 && result.present_hz == 40);
     tests++;
+    // Sharpening is owned by Java and persisted in the same file; native boot parsing must accept and ignore it.
+    reset_environment();
+    write_config("operation_mode=handheld\nhandheld_sharpen_preset=1\nhandheld_sharpen_strength=0.3\nconsole_sharpen_preset=0\nconsole_sharpen_strength=0.0\n");
+    result = apply_ok(temporary);
+    assert(result.operation_mode == 0 && result.quality_preset == -1 && result.present_hz == -1);
+    tests++;
+    expect_bad("handheld_sharpen_preset=5\n", "sharpen_preset must be 0-4");
+    expect_bad("console_sharpen_strength=1.1\n", "sharpen_strength must be 0-1");
     expect_bad("quality_preset=4\n", "quality_preset must be -1 or 0-3");
     expect_bad("quality_preset=-2\n", "quality_preset must be -1 or 0-3");
     expect_bad("quality_preset=1x\n", "quality_preset must be -1 or 0-3");

@@ -10,11 +10,12 @@ Release artifacts contain the Android port and launcher only. They do not contai
 - Added a persistent sharpening control to the Android menu: Off/Low/Medium/High presets plus custom strength adjustment, profile persistence, localized labels, and accessible +/- descriptions.
 - The Vulkan sharpen pass maps the selected source crop to the destination rectangle, preserves cleared letterbox pixels, falls back to the linear blit on initialization/resource failure, and caches swapchain framebuffers and descriptor resources so enabled sharpening does not allocate Vulkan objects every frame.
 - Refreshed bundled drivers to MaliSX2 0.6.1 and Mesa Turnip v27.0.0-20261126. PanVK r10 was already the latest pinned release and remains unchanged.
+- Fixed Android startup parsing for the Java-persisted `handheld_`/`console_` sharpening keys. The previous build rejected `sharpen_preset` as an unknown launch setting before the game could start.
 
 ### Packaging
 
 - Complete `--game-run` package-only APK retained: Java launcher/game activity, `classes.dex`, normal/large touch-layout migration profiles, MaliSX2 0.6.1, PanVK r10, Turnip v27.0.0-20261126, and sharpening support.
-- APK metadata is `versionName=0.7.8-android-port`, `versionCode=708`, size `42,123,820` bytes, SHA-256 `1a619ba3a6f5003fe3d3fc00d856ba5ddcb814f5bfa7324c6ab016a0ce6a72b6`. APK signing verification passed with v3 using certificate SHA-256 `4832e0a9cbd08999c2279be1fc3c5d3ccc8c0b2b64f190e2dd4c275355689794`; this does not match v0.7.7's `d4cbe1c8…`, so publication/install-over upgrade is blocked until the previous keystore is restored.
+- APK metadata is `versionName=0.7.8-android-port`, `versionCode=708`, size `42,123,820` bytes, SHA-256 `697a5e662d9141af0562923880dd7918d6237043e0d8498b348c096849d3250f`. APK signing uses the v0.7.8 certificate `4832e0a9…`; v0.7.7 remains signed by `d4cbe1c8…`.
 
 ## [v0.7.7] — 2026-11-24
 

@@ -104,8 +104,10 @@ static int parse_settings(char *content, dm_android_launch_settings *settings,
             else if (!strcmp(key, "auto_min")) bit = 128;
             else if (!strcmp(key, "auto_max")) bit = 256;
             else if (!strcmp(key, "diagnostics")) bit = 512;
+            else if (!strcmp(key, "sharpen_preset")) bit = 1024;
+            else if (!strcmp(key, "sharpen_strength")) bit = 2048;
             else return fail(error, capacity, "unknown launch settings key on line %u: %s", line_number, key);
-            if (profile >= 0 && bit != 16 && bit != 64 && bit != 128 && bit != 256)
+            if (profile >= 0 && bit != 16 && bit != 64 && bit != 128 && bit != 256 && bit != 1024 && bit != 2048)
                 return fail(error, capacity, "invalid profile key on line %u: %s", line_number, key);
             unsigned seen_bit = profile < 0 ? bit : bit << (profile ? 18 : 9);
             if (seen & seen_bit) return fail(error, capacity, "duplicate launch settings key on line %u: %s", line_number, key);
@@ -157,6 +159,15 @@ static int parse_settings(char *content, dm_android_launch_settings *settings,
                 if (!strcmp(value, "0")) settings->diagnostics = 0;
                 else if (!strcmp(value, "1")) settings->diagnostics = 1;
                 else return fail(error, capacity, "diagnostics must be 0 or 1");
+            } else if (bit == 1024) {
+                int preset = 0; char tail = 0;
+                if (sscanf(value, "%d%c", &preset, &tail) != 1 || preset < 0 || preset > 4)
+                    return fail(error, capacity, "launch settings line %u: sharpen_preset must be 0-4", line_number);
+            } else if (bit == 2048) {
+                float strength = 0.0f; char tail = 0;
+                if (sscanf(value, "%f%c", &strength, &tail) != 1 ||
+                    strength != strength || strength < 0.0f || strength > 1.0f)
+                    return fail(error, capacity, "launch settings line %u: sharpen_strength must be 0-1", line_number);
             } else {
                 if (!strcmp(value, "0")) settings->input_receipts = 0;
                 else if (!strcmp(value, "1")) settings->input_receipts = 1;
