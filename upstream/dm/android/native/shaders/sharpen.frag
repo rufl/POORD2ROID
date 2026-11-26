@@ -52,7 +52,7 @@ void main() {
         return;
     }
     
-    
+
     // Each later cas_sample overwrote the previous result. Keep the last
     // effective direction for each radius and avoid the discarded samples.
     int r = clamp(params.radius, 1, 3);
