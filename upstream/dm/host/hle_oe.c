@@ -229,6 +229,28 @@ static _Atomic int g_scale3d_forced = -1;
 static _Atomic int g_scale3d_auto_min = 50;
 static _Atomic int g_scale3d_auto_max = 100;
 static _Atomic int g_scale3d_thermal_cap = 100;
+// ---------- 可控锐化（CAS-like） ----------
+// 0 = 关；0.05–1.0 强度；半径 1–3；阈值 0–0.1（避免文本/UI 锐化伪影）
+static _Atomic float g_sharpen_strength = 0.0f;
+static _Atomic int g_sharpen_radius = 1;
+static _Atomic float g_sharpen_threshold = 0.0f;
+void dm_sharpen_set(float strength, int radius, float threshold) {
+    if (strength < 0.0f) strength = 0.0f; else if (strength > 1.0f) strength = 1.0f;
+    if (radius < 1) radius = 1; else if (radius > 3) radius = 3;
+    if (threshold < 0.0f) threshold = 0.0f; else if (threshold > 0.1f) threshold = 0.1f;
+    atomic_store(&g_sharpen_strength, strength);
+    atomic_store(&g_sharpen_radius, radius);
+    atomic_store(&g_sharpen_threshold, threshold);
+    LOG("锐化设置：强度=%.3f 半径=%d 阈值=%.3f", strength, radius, threshold);
+}
+void dm_sharpen_get(float *strength, int *radius, float *threshold) {
+    if (strength) *strength = atomic_load(&g_sharpen_strength);
+    if (radius) *radius = atomic_load(&g_sharpen_radius);
+    if (threshold) *threshold = atomic_load(&g_sharpen_threshold);
+}
+int dm_sharpen_enabled(void) {
+    return atomic_load(&g_sharpen_strength) > 0.0f;
+}
 void dm_3d_scale_set_preset(int preset) {
     if (preset < -1 || preset > 3) return;
     atomic_store(&g_scale3d_forced, preset);

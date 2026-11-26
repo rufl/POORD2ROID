@@ -242,6 +242,7 @@ static int gpu_is_mali_properties(const VkPhysicalDeviceProperties *properties);
 
 #include "nvn_vulkan_pipeline_cache.inc"
 #include "nvn_vulkan_cpu_phases.inc"
+static void sharpen_cleanup(void);
 
 #ifdef DM_VK_REFERENCE_GATES
 #include "nvn_vulkan_test_gate.inc"
@@ -252,7 +253,7 @@ static int gpu_is_mali_properties(const VkPhysicalDeviceProperties *properties);
 // Release an unsubmitted context only on initialization failure, then fully fall back; never switch a live driver.
 static int initialize_driver_fallback(const char *reason) {
     if(!vk_api.using_custom)return 0;
-    if(device){if(!vk_api.vkDestroyDevice)return 0;vkDestroyDevice(device,NULL);device=VK_NULL_HANDLE;}
+    if(device){sharpen_cleanup();if(!vk_api.vkDestroyDevice)return 0;vkDestroyDevice(device,NULL);device=VK_NULL_HANDLE;}
     if(surface){if(!vk_api.vkDestroySurfaceKHR)return 0;vkDestroySurfaceKHR(instance,surface,NULL);surface=VK_NULL_HANDLE;}
     if(instance){if(!vk_api.vkDestroyInstance)return 0;vkDestroyInstance(instance,NULL);instance=VK_NULL_HANDLE;}
     physical=VK_NULL_HANDLE;queue=VK_NULL_HANDLE;
@@ -382,6 +383,7 @@ static unsigned screen_black_regions(VkImageBlit regions[4],int x,int y,int widt
 static void screen_release(void) {
     if (!device) return;
     pthread_mutex_lock(&queue_lock);pthread_mutex_lock(&vk_queue_lock);VK_CHECK(vkQueueWaitIdle(queue));pthread_mutex_unlock(&vk_queue_lock);pthread_mutex_unlock(&queue_lock);
+    sharpen_cleanup();
     if (swapchain) { vkDestroySwapchainKHR(device, swapchain, NULL); swapchain = VK_NULL_HANDLE; }
     if(screen_black_image)vkDestroyImage(device,screen_black_image,NULL);
     if(screen_black_memory)vkFreeMemory(device,screen_black_memory,NULL);
@@ -1227,6 +1229,7 @@ void mtl_drain(void) { mtl_init();mtl_finish(); pthread_mutex_lock(&queue_lock);
 #include "nvn_vulkan_counter_gpu.inc"
 #include "nvn_vulkan_batch_resources.inc"
 #include "nvn_vulkan_probe.inc"
+#include "nvn_vulkan_sharpen.inc"
 
 static void execute(const uint8_t *p, unsigned depth) {
     if (depth > 32) die("NVN command call recursion");
@@ -1409,11 +1412,17 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
             }
             VkMemoryBarrier clear_order = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT};
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &clear_order, 0, NULL, 0, NULL);
-        } else present_clear_skipped++;
-        VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}, .srcOffsets = {{sx,sy,0},{sx+sw,sy+sh,1}}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}, .dstOffsets = {{x,y,0},{x+dw,y+dh,1}}};
-        vkCmdBlitImage(command, e->image, VK_IMAGE_LAYOUT_GENERAL, screen_images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; barrier.dstAccessMask = 0; barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+        }
+        if (dm_sharpen_enabled() && sharpen_draw(command, e, screen_images[index], index,
+                                                 screen_extent.width, screen_extent.height,
+                                                 sx, sy, sw, sh, x, y, dw, dh)) {
+            // Sharpening pass completed; it owns the destination transition.
+        } else {
+            VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}, .srcOffsets = {{sx,sy,0},{sx+sw,sy+sh,1}}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}, .dstOffsets = {{x,y,0},{x+dw,y+dh,1}}};
+            vkCmdBlitImage(command, e->image, VK_IMAGE_LAYOUT_GENERAL, screen_images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; barrier.dstAccessMask = 0; barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+        }
         screen_submission = 1; completion_ticket=mtl_sub_commit(); screen_submission = 0;
         screen_acquire_tickets[acquire_slot]=completion_ticket;
         screen_acquire_slot=(acquire_slot+1)%screen_acquire_slots; screen_initialized[index] = 1;

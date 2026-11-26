@@ -802,6 +802,24 @@ __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivit
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setSkipSaveOnExit(JNIEnv *env,jclass klass,jboolean skip) {
     (void)env;(void)klass;atomic_store(&skip_save_once,skip?1:0);
 }
+static void dm_android_sharpen_update(float strength, int radius, float threshold) {
+    float current_strength, current_threshold;
+    int current_radius;
+    dm_sharpen_get(&current_strength, &current_radius, &current_threshold);
+    if (strength < 0.0f) strength = current_strength;
+    if (radius < 0) radius = current_radius;
+    if (threshold < 0.0f) threshold = current_threshold;
+    dm_sharpen_set(strength, radius, threshold);
+}
+__attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setSharpenStrength(JNIEnv *env,jclass klass,jfloat strength) {
+    (void)env;(void)klass;dm_android_sharpen_update(strength, -1, -1.0f);
+}
+__attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setSharpenRadius(JNIEnv *env,jclass klass,jint radius) {
+    (void)env;(void)klass;dm_android_sharpen_update(-1.0f, radius, -1.0f);
+}
+__attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setSharpenThreshold(JNIEnv *env,jclass klass,jfloat threshold) {
+    (void)env;(void)klass;dm_android_sharpen_update(-1.0f, -1, threshold);
+}
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_onTouchPad(JNIEnv *env,jclass klass,jlong buttons,jint lx,jint ly,jint rx,jint ry) {
     (void)env;(void)klass;game_app *s=application;if(!s)return;
     // Java 窗口触控和 AInputQueue 都在 Activity 的主 Looper；统一走 HLE 的短按锁存。
@@ -1102,7 +1120,10 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
         {"setPresentHz","(I)V",(void*)Java_org_d2r_android_port_D2RActivity_setPresentHz},
         {"trimGpuBuffers","()V",(void*)Java_org_d2r_android_port_D2RActivity_trimGpuBuffers},
         {"setMenuOpen","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setMenuOpen},
-        {"setSkipSaveOnExit","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setSkipSaveOnExit}
+        {"setSkipSaveOnExit","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setSkipSaveOnExit},
+        {"setSharpenStrength","(F)V",(void*)Java_org_d2r_android_port_D2RActivity_setSharpenStrength},
+        {"setSharpenRadius","(I)V",(void*)Java_org_d2r_android_port_D2RActivity_setSharpenRadius},
+        {"setSharpenThreshold","(F)V",(void*)Java_org_d2r_android_port_D2RActivity_setSharpenThreshold}
     };
     if((*a->env)->RegisterNatives(a->env,klass,methods,sizeof methods/sizeof methods[0])!=JNI_OK){
         __android_log_print(ANDROID_LOG_ERROR,"D2RAndroid","[android-startup] JNI callback registration failed");

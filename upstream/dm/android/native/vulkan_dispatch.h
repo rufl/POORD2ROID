@@ -105,12 +105,14 @@
     X(vkDestroyPipelineLayout) \
     X(vkDestroyQueryPool) \
     X(vkDestroyRenderPass) \
+    X(vkDestroySampler) \
     X(vkDestroySemaphore) \
     X(vkDestroyShaderModule) \
     X(vkDestroySwapchainKHR) \
     X(vkDeviceWaitIdle) \
     X(vkEndCommandBuffer) \
     X(vkFreeCommandBuffers) \
+    X(vkFreeDescriptorSets) \
     X(vkFreeMemory) \
     X(vkGetBufferMemoryRequirements) \
     X(vkGetDeviceQueue) \
@@ -210,6 +212,7 @@
 #define vkDestroyPipelineLayout(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyPipelineLayout)(__VA_ARGS__)
 #define vkDestroyQueryPool(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyQueryPool)(__VA_ARGS__)
 #define vkDestroyRenderPass(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyRenderPass)(__VA_ARGS__)
+#define vkDestroySampler(...) (DM_VK_DISPATCH_CONTEXT.vkDestroySampler)(__VA_ARGS__)
 #define vkDestroySemaphore(...) (DM_VK_DISPATCH_CONTEXT.vkDestroySemaphore)(__VA_ARGS__)
 #define vkDestroyShaderModule(...) (DM_VK_DISPATCH_CONTEXT.vkDestroyShaderModule)(__VA_ARGS__)
 #define vkDestroySurfaceKHR(...) (DM_VK_DISPATCH_CONTEXT.vkDestroySurfaceKHR)(__VA_ARGS__)
@@ -219,6 +222,7 @@
 #define vkEnumerateDeviceExtensionProperties(...) (DM_VK_DISPATCH_CONTEXT.vkEnumerateDeviceExtensionProperties)(__VA_ARGS__)
 #define vkEnumeratePhysicalDevices(...) (DM_VK_DISPATCH_CONTEXT.vkEnumeratePhysicalDevices)(__VA_ARGS__)
 #define vkFreeCommandBuffers(...) (DM_VK_DISPATCH_CONTEXT.vkFreeCommandBuffers)(__VA_ARGS__)
+#define vkFreeDescriptorSets(...) (DM_VK_DISPATCH_CONTEXT.vkFreeDescriptorSets)(__VA_ARGS__)
 #define vkFreeMemory(...) (DM_VK_DISPATCH_CONTEXT.vkFreeMemory)(__VA_ARGS__)
 #define vkGetBufferMemoryRequirements(...) (DM_VK_DISPATCH_CONTEXT.vkGetBufferMemoryRequirements)(__VA_ARGS__)
 #define vkGetDeviceProcAddr(...) (DM_VK_DISPATCH_CONTEXT.vkGetDeviceProcAddr)(__VA_ARGS__)

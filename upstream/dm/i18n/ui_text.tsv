@@ -400,6 +400,15 @@ dmAndroidMenuQualityHigh	高质量	High	Android 游戏内菜单
 dmAndroidMenuQualityBalanced	平衡	Balanced	Android 游戏内菜单
 dmAndroidMenuQualityPerformance	性能	Performance	Android 游戏内菜单
 dmAndroidMenuQualityUltra	超性能（3D 0.50）	Ultra performance (3D 0.50)	Android 游戏内菜单
+dmAndroidMenuSharpen	锐化	Sharpening	Android 游戏内菜单
+dmAndroidMenuSharpenStrength	锐度强度	Sharpen strength	Android 游戏内菜单
+dmAndroidMenuSharpenOff	关闭	Off	Android 游戏内菜单
+dmAndroidMenuSharpenLow	低	Low	Android 游戏内菜单
+dmAndroidMenuSharpenMedium	中	Medium	Android 游戏内菜单
+dmAndroidMenuSharpenHigh	高	High	Android 游戏内菜单
+dmAndroidMenuSharpenCustom	自定义	Custom	Android 游戏内菜单
+dmAndroidMenuSharpenDecrease	降低锐度	Decrease sharpening	Android 游戏内菜单
+dmAndroidMenuSharpenIncrease	提高锐度	Increase sharpening	Android 游戏内菜单
 dmAndroidMenuAutoRange	自动 3D 范围	Auto 3D range	Android 游戏内菜单
 dmAndroidMenuRenderNow	当前 3D	Active 3D	Android 游戏内菜单
 dmAndroidMenuDiagnostics	性能诊断日志（重启生效）	Diagnostics log (restart)	Android 游戏内菜单

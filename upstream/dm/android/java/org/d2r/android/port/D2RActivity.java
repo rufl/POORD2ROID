@@ -92,6 +92,9 @@ public final class D2RActivity extends NativeActivity {
     private static native void setMenuOpen(boolean open);
     private static native void setSkipSaveOnExit(boolean skip);
     private static native void trimGpuBuffers();
+    private static native void setSharpenStrength(float strength);
+    private static native void setSharpenRadius(int radius);
+    private static native void setSharpenThreshold(float threshold);
     // 存档导入/导出的文件选择器请求码（与文本输入等其它结果回调区分开）。
     // Request codes for the save pickers, kept apart from the other result callbacks.
     private static final int EXPORT_SAVE = 21;
@@ -106,7 +109,7 @@ public final class D2RActivity extends NativeActivity {
     // easy to hit by accident and would quit the whole run. So back opens this menu instead: frame rate display /
     // on-screen controls / quality / exit game. Press back again (or tap outside) to close it.
     private PopupWindow menuPopup;
-    private TextView menuOverlayRow, menuControlsRow, menuQualityRow, menuAutoRangeRow, menuFrameRateRow, menuRenderNowRow, menuDiagnosticsRow, menuFontLabel, menuFontMinus, menuFontPlus;
+    private TextView menuOverlayRow, menuControlsRow, menuQualityRow, menuAutoRangeRow, menuFrameRateRow, menuRenderNowRow, menuDiagnosticsRow, menuFontLabel, menuFontMinus, menuFontPlus, menuSharpenMinus, menuSharpenPlus;
     private boolean fontLarge;
     private boolean handheldProfile = true;
     private boolean diagnosticsEnabled;
@@ -121,6 +124,18 @@ public final class D2RActivity extends NativeActivity {
     private int[] presentHzValues = {30, 60, -1};
     private int presentHzIndex = 1;
     private static final String[] QUALITY_KEYS = {"dmAndroidMenuQualityAuto", "dmAndroidMenuQualityHigh", "dmAndroidMenuQualityBalanced", "dmAndroidMenuQualityPerformance", "dmAndroidMenuQualityUltra"};
+    // Sharpening presets: Off / Low / Medium / High, plus a persisted custom strength.
+    private static final String[] SHARPEN_KEYS = {"dmAndroidMenuSharpenOff", "dmAndroidMenuSharpenLow", "dmAndroidMenuSharpenMedium", "dmAndroidMenuSharpenHigh"};
+    private static final float[][] SHARPEN_PRESETS = {
+        {0.0f, 1, 0.0f},
+        {0.3f, 1, 0.01f},
+        {0.5f, 2, 0.02f},
+        {0.7f, 2, 0.03f}
+    };
+    private static final int SHARPEN_CUSTOM = SHARPEN_PRESETS.length;
+    private int sharpenPreset;
+    private float sharpenStrength = SHARPEN_PRESETS[0][0];
+    private TextView menuSharpenRow;
     // The same palette as the launcher (GOLD/PARCHMENT there), so the menu looks like part of the same app.
     private static final int GOLD = 0xffe8c078;
     private static final int PARCHMENT = 0xffe8e0d0;
@@ -198,6 +213,50 @@ public final class D2RActivity extends NativeActivity {
         menuQualityRow = menuRow();
         menuQualityRow.setOnClickListener(v -> { qualityPreset = (qualityPreset + 1) % QUALITY_KEYS.length; applyQualityPreset(); updateMenuLabels(); });
         column.addView(menuQualityRow);
+        menuSharpenRow = menuRow();
+        menuSharpenRow.setOnClickListener(v -> {
+            sharpenPreset = sharpenPreset >= SHARPEN_KEYS.length ? 0 : (sharpenPreset + 1) % SHARPEN_KEYS.length;
+            applySharpenPreset();
+            updateMenuLabels();
+        });
+        column.addView(menuSharpenRow);
+        // Sharpen strength fine-tune row (like font +/-)
+        LinearLayout sharpenRow = new LinearLayout(this);
+        sharpenRow.setOrientation(LinearLayout.HORIZONTAL);
+        sharpenRow.setGravity(Gravity.CENTER_VERTICAL);
+        int sharpenPadV = (int)(7 * density), sharpenPadH = (int)(12 * density);
+        TextView sharpenLabel = menuRow();
+        sharpenLabel.setSingleLine(true);
+        sharpenLabel.setClickable(false);
+        sharpenLabel.setText(text("dmAndroidMenuSharpenStrength"));
+        sharpenRow.addView(sharpenLabel, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        menuSharpenMinus = menuRow();
+        menuSharpenMinus.setText("−");
+        menuSharpenMinus.setGravity(Gravity.CENTER);
+        menuSharpenMinus.setMinWidth((int)(36 * density));
+        menuSharpenMinus.setPadding(sharpenPadH, sharpenPadV, sharpenPadH, sharpenPadV);
+        menuSharpenMinus.setBackgroundColor(0x26ffffff);
+        menuSharpenMinus.setContentDescription(text("dmAndroidMenuSharpenDecrease"));
+        menuSharpenMinus.setOnClickListener(v -> adjustSharpenStrength(-0.1f));
+        LinearLayout.LayoutParams sharpenMinusParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sharpenMinusParams.setMarginStart((int)(10 * density));
+        sharpenRow.addView(menuSharpenMinus, sharpenMinusParams);
+        menuSharpenPlus = menuRow();
+        menuSharpenPlus.setText("+");
+        menuSharpenPlus.setGravity(Gravity.CENTER);
+        menuSharpenPlus.setMinWidth((int)(36 * density));
+        menuSharpenPlus.setPadding(sharpenPadH, sharpenPadV, sharpenPadH, sharpenPadV);
+        menuSharpenPlus.setBackgroundColor(0x26ffffff);
+        menuSharpenPlus.setContentDescription(text("dmAndroidMenuSharpenIncrease"));
+        menuSharpenPlus.setOnClickListener(v -> adjustSharpenStrength(+0.1f));
+        LinearLayout.LayoutParams sharpenPlusParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sharpenPlusParams.setMarginStart((int)(6 * density));
+        sharpenRow.addView(menuSharpenPlus, sharpenPlusParams);
+        column.addView(sharpenRow, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         menuAutoRangeRow = menuRow();
         menuAutoRangeRow.setOnClickListener(v -> { autoBoundsIndex = (autoBoundsIndex + 1) % AUTO_BOUNDS_PRESETS.length; applyAutoBounds(); updateMenuLabels(); });
         column.addView(menuAutoRangeRow);
@@ -291,7 +350,6 @@ public final class D2RActivity extends NativeActivity {
         String scoped = LaunchSettings.read(file, profilePrefix() + key);
         return scoped != null ? scoped : LaunchSettings.read(file, key);
     }
-
     private void updateMenuLabels() {
         if (menuOverlayRow == null) return;
         String on = text("dmAndroidMenuOn"), off = text("dmAndroidMenuOff");
@@ -302,6 +360,14 @@ public final class D2RActivity extends NativeActivity {
             int[] b = AUTO_BOUNDS_PRESETS[autoBoundsIndex];
             menuAutoRangeRow.setText(text("dmAndroidMenuAutoRange") + "：" + b[0] + "–" + b[1] + "%");
             menuAutoRangeRow.setAlpha(QUALITY_LEVELS[qualityPreset] < 0 ? 1.0f : 0.55f);
+        }
+        if (menuSharpenRow != null) {
+            if (sharpenPreset < SHARPEN_KEYS.length) {
+                menuSharpenRow.setText(text("dmAndroidMenuSharpen") + "：" + text(SHARPEN_KEYS[sharpenPreset]));
+            } else {
+                menuSharpenRow.setText(text("dmAndroidMenuSharpen") + "：" + text("dmAndroidMenuSharpenCustom")
+                        + " " + String.format(java.util.Locale.ROOT, "%.1f", sharpenStrength));
+            }
         }
         if (menuFrameRateRow != null) menuFrameRateRow.setText(text("dmAndroidMenuFrameRate") + "：" + frameRateLabel());
         if (menuRenderNowRow != null) {
@@ -317,7 +383,11 @@ public final class D2RActivity extends NativeActivity {
             text(fontLarge ? "dmAndroidMenuFontLarge" : "dmAndroidMenuFontNormal"));
         if (menuFontMinus != null) menuFontMinus.setAlpha(fontLarge ? 1.0f : 0.45f);
         if (menuFontPlus != null) menuFontPlus.setAlpha(fontLarge ? 0.45f : 1.0f);
+        // Sharpen +/- buttons alpha (disable at bounds)
+        if (menuSharpenMinus != null) menuSharpenMinus.setAlpha(getCurrentSharpenStrength() > 0.05f ? 1.0f : 0.45f);
+        if (menuSharpenPlus != null) menuSharpenPlus.setAlpha(getCurrentSharpenStrength() < 0.95f ? 1.0f : 0.45f);
     }
+
 
     // 帧率档的当前值与它的写法（配置里同一个键：0 = 跟随屏幕，其余是固定帧率）。
     // The frame rate preset's current value and how it is written (the same key in the configuration: 0 = follow the
@@ -361,6 +431,21 @@ public final class D2RActivity extends NativeActivity {
         }
         Log.i("D2RAndroid", "[quality] profile=" + (handheldProfile ? "handheld" : "console") + " auto_bounds=" + b[0] + "-" + b[1] + "%");
     }
+    private void applySharpenPreset() {
+        float[] preset = SHARPEN_PRESETS[sharpenPreset];
+        sharpenStrength = preset[0];
+        setSharpenStrength(sharpenStrength);
+        setSharpenRadius((int)preset[1]);
+        setSharpenThreshold(preset[2]);
+        File file = configFile();
+        if (file != null) {
+            LaunchSettings.write(file, profilePrefix() + "sharpen_preset", String.valueOf(sharpenPreset));
+            LaunchSettings.write(file, profilePrefix() + "sharpen_strength", String.valueOf(sharpenStrength));
+        }
+        Log.i("D2RAndroid", "[sharpen] profile=" + (handheldProfile ? "handheld" : "console")
+                + " preset=" + sharpenPreset + " strength=" + sharpenStrength
+                + " radius=" + (int)preset[1] + " threshold=" + preset[2]);
+    }
 
     private void persistDiagnostics() {
         File file = configFile();
@@ -373,6 +458,27 @@ public final class D2RActivity extends NativeActivity {
         if (file != null) LaunchSettings.write(file, "font_large", large ? "1" : "0");
         Log.i("D2RAndroid", "[font] overlay profile stored for next launch=" + (large ? "large" : "normal"));
         updateMenuLabels();
+    }
+    private void adjustSharpenStrength(float delta) {
+        float newStrength = Math.max(0.0f, Math.min(1.0f, sharpenStrength + delta));
+        if (Math.abs(newStrength - sharpenStrength) < 0.001f) return;
+        sharpenStrength = newStrength;
+        sharpenPreset = SHARPEN_CUSTOM;
+        setSharpenStrength(sharpenStrength);
+        setSharpenRadius(1);
+        setSharpenThreshold(0.01f);
+        File file = configFile();
+        if (file != null) {
+            LaunchSettings.write(file, profilePrefix() + "sharpen_preset", String.valueOf(SHARPEN_CUSTOM));
+            LaunchSettings.write(file, profilePrefix() + "sharpen_strength", String.valueOf(sharpenStrength));
+        }
+        Log.i("D2RAndroid", "[sharpen] profile=" + (handheldProfile ? "handheld" : "console")
+                + " preset=custom strength=" + sharpenStrength);
+        updateMenuLabels();
+    }
+
+    private float getCurrentSharpenStrength() {
+        return sharpenStrength;
     }
 
     // 「帧率显示」写回配置：重启后还记得（native 启动时读 DM_DEBUG_OVERLAY）。
@@ -630,6 +736,26 @@ public final class D2RActivity extends NativeActivity {
                 int hz = presentHzValues[i];
                 if (hzSetting.equals(hz < 0 ? "0" : String.valueOf(hz))) { presentHzIndex = i; break; }
             }
+        }
+        String sharpenSetting = readProfileSetting("sharpen_preset");
+        if (sharpenSetting != null) {
+            try {
+                int preset = Integer.parseInt(sharpenSetting);
+                if (preset >= 0 && preset <= SHARPEN_CUSTOM) sharpenPreset = preset;
+            } catch (NumberFormatException ignored) { }
+        }
+        String strengthSetting = readProfileSetting("sharpen_strength");
+        if (sharpenPreset == SHARPEN_CUSTOM && strengthSetting != null) {
+            try {
+                sharpenStrength = Math.max(0.0f, Math.min(1.0f, Float.parseFloat(strengthSetting)));
+            } catch (NumberFormatException ignored) {
+                sharpenStrength = 0.0f;
+            }
+            setSharpenStrength(sharpenStrength);
+            setSharpenRadius(1);
+            setSharpenThreshold(0.01f);
+        } else {
+            applySharpenPreset();
         }
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         debugView = new TextView(this);

@@ -57,8 +57,8 @@ def run(args, **kwargs):
 PANVK_ARCHIVE_SHA256 = "7e97db4d79d81ec9461d1e0676b62a865561cb56e21c151693aa25ffbe749f1c"
 PANVK_LIBRARY_SHA256 = "80acd461bdf07f5fb99af5c7f516e272103340b6775c22dcd347a6d418c7ac0d"
 
-MALISX2_ARCHIVE_SHA256 = "55b17293a6e3ab089e2d255cc6741f574def4c241265547d4a5aaa01cb4047f8"
-MALISX2_LIBRARY_SHA256 = "c1c8738fabd6a3b5a8c2d3d0a732b1498a0569251d22cf7f05cd50c81db176fb"
+MALISX2_ARCHIVE_SHA256 = "1fbdb5dee1217d0f97190a60844f83c4504567c8c6bc6399b5a8843840e99206"
+MALISX2_LIBRARY_SHA256 = "c19badcb876fa863afe215fc20b1b87f3e78e964f961f03cc5925ab77381ac2f"
 
 
 def package_malisx2(archive_path, assets, licenses):
@@ -72,8 +72,8 @@ def package_malisx2(archive_path, assets, licenses):
     try:
         with zipfile.ZipFile(archive_path) as archive:
             metadata = json.loads(archive.read("meta.json"))
-            if (metadata.get("name") != "malisx2 0.6.0 (62d6d62423)"
-                    or metadata.get("packageVersion") != "0.6.0+62d6d62423"
+            if (metadata.get("name") != "malisx2 0.6.1 (9fbc7da290)"
+                    or metadata.get("packageVersion") != "0.6.1+9fbc7da290"
                     or metadata.get("minApi") != 29
                     or metadata.get("libraryName") != "libvulkan_malisx2.so"):
                 sys.exit("Unexpected MaliSX2 package metadata")
@@ -88,8 +88,8 @@ def package_malisx2(archive_path, assets, licenses):
     temporary.replace(output / "libvulkan_malisx2.so")
     (output / "driver.sha256").write_text(MALISX2_LIBRARY_SHA256 + "\n", encoding="ascii")
     (output / "NOTICE.txt").write_text(
-        "MaliSX2 0.6.0 (62d6d62423), bundled from bmdhacks/malisx2.\n"
-        "Release: https://github.com/bmdhacks/malisx2/releases/tag/v0.6.0\n"
+        "MaliSX2 0.6.1 (9fbc7da290), bundled from bmdhacks/malisx2.\n"
+        "Release: https://github.com/bmdhacks/malisx2/releases/tag/v0.6.1\n"
         "Mesa-derived components use their respective licenses; source is pinned at\n"
         "https://github.com/bmdhacks/armsx2-turnip/tree/b5f8787e44083b4840f605b595e79fcf61077175\n"
         "Experimental alternate Vulkan driver. D2R/Android window presentation and Xiaomi 11T gameplay are unverified.\n"
@@ -97,7 +97,7 @@ def package_malisx2(archive_path, assets, licenses):
         encoding="utf-8")
     shutil.copyfile(ROOT / "prebuilt/MaliSX2-LICENSE.txt", licenses / "MaliSX2-LICENSE.txt")
     shutil.copyfile(output / "NOTICE.txt", licenses / "MaliSX2-NOTICE.txt")
-    print("MaliSX2 0.6.0 ICD: archive and library checksums verified", flush=True)
+    print("MaliSX2 0.6.1 ICD: archive and library checksums verified", flush=True)
 
 
 def sha256_file(path):
@@ -180,6 +180,43 @@ def build_bc_decode(build):
         header.write_text(text)
 
 
+def build_sharpen(build):
+    # Generate sharpen shaders from GLSL independently of the game cache.
+    # Vertex shader
+    output_vert = build / "sharpen.vert.spv"
+    run([TOOLS / "ndk/shader-tools/linux-x86_64/glslc", "--target-env=vulkan1.1", "-O",
+         ROOT / "native/shaders/sharpen.vert", "-o", output_vert])
+    data = output_vert.read_bytes()
+    if len(data) < 20 or len(data) % 4:
+        sys.exit("Invalid sharpen vertex SPIR-V size")
+    words = struct.unpack("<" + "I" * (len(data) // 4), data)
+    if words[0] != 0x07230203:
+        sys.exit("Invalid sharpen vertex SPIR-V magic")
+    text = "// 从生产GLSL自动生成。| Generated from production GLSL.\n#pragma once\n#include <stdint.h>\n"
+    text += "static const uint32_t dm_vk_sharpen_vert_spv[] = {\n"
+    text += "".join("    " + ",".join(f"0x{word:08x}u" for word in words[i:i+8]) + ",\n" for i in range(0,len(words),8))
+    text += "};\n#define DM_VK_SHARPEN_VERT_SPV_BYTES (sizeof dm_vk_sharpen_vert_spv)\n"
+    header = ROOT / "native/sharpen_vert_spv.h"
+    if not header.exists() or header.read_text() != text:
+        header.write_text(text)
+
+    # Fragment shader
+    output_frag = build / "sharpen.frag.spv"
+    run([TOOLS / "ndk/shader-tools/linux-x86_64/glslc", "--target-env=vulkan1.1", "-O",
+         ROOT / "native/shaders/sharpen.frag", "-o", output_frag])
+    data = output_frag.read_bytes()
+    if len(data) < 20 or len(data) % 4:
+        sys.exit("Invalid sharpen fragment SPIR-V size")
+    words = struct.unpack("<" + "I" * (len(data) // 4), data)
+    if words[0] != 0x07230203:
+        sys.exit("Invalid sharpen fragment SPIR-V magic")
+    text = "// 从生产GLSL自动生成。| Generated from production GLSL.\n#pragma once\n#include <stdint.h>\n"
+    text += "static const uint32_t dm_vk_sharpen_frag_spv[] = {\n"
+    text += "".join("    " + ",".join(f"0x{word:08x}u" for word in words[i:i+8]) + ",\n" for i in range(0,len(words),8))
+    text += "};\n#define DM_VK_SHARPEN_FRAG_SPV_BYTES (sizeof dm_vk_sharpen_frag_spv)\n"
+    header = ROOT / "native/sharpen_frag_spv.h"
+    if not header.exists() or header.read_text() != text:
+        header.write_text(text)
 
 
 # APK 的版本必须能区分构建。写死的版本名会让系统把两个不同构建当成同一个版本（覆盖安装只提示"重新安装"），
@@ -227,8 +264,8 @@ def main():
                         help="pinned JimVulkan r10 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-panvk", action="store_true",
                         help="明确构建不含 PanVK 的 APK")
-    parser.add_argument("--malisx2", type=Path, default=ROOT / "prebuilt/malisx2-0.6.0-62d6d62423.zip",
-                        help="pinned MaliSX2 0.6.0 package; archive and library SHA-256 are verified")
+    parser.add_argument("--malisx2", type=Path, default=ROOT / "prebuilt/malisx2-0.6.1-9fbc7da290.zip",
+                        help="pinned MaliSX2 0.6.1 package; archive and library SHA-256 are verified")
     parser.add_argument("--no-malisx2", action="store_true",
                         help="明确构建不含 MaliSX2 的 APK")
     parser.add_argument("--touch-overlay-migration", type=Path,
@@ -260,11 +297,14 @@ def main():
         print("Package-only build: game modules come from the imported package", flush=True)
     build = ROOT / "build"
     build.mkdir(exist_ok=True)
+    required = [BIN / "aarch64-linux-android29-clang", TOOLS / "jdk/bin/java", TOOLS / "platform/android.jar"]
+    for required_tool in required:
+        if not required_tool.exists():
+            sys.exit("Missing tool: " + str(required_tool) + "; run tools/bootstrap.py")
     if args.game_run:
         build_counter_timestamp(build)
         build_bc_decode(build)
-    for required in [BIN / "aarch64-linux-android29-clang", TOOLS / "jdk/bin/java", TOOLS / "platform/android.jar"]:
-        if not required.exists(): sys.exit("Missing tool: " + str(required) + "; run tools/bootstrap.py")
+        build_sharpen(build)
     env = dict(os.environ, JAVA_HOME=str(TOOLS / "jdk"), PATH=str(TOOLS / "jdk/bin") + os.pathsep + os.environ["PATH"])
     entry = build / "entry_elf.S"
     run([sys.executable, ROOT / "tools/generate_entry.py", entry])

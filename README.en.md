@@ -1,5 +1,5 @@
 # POORD2ROID — Diablo II: Resurrected on Android on Mali-G77 MC9 / Xiaomi 11T
-- [Português](README.md) · [Latest release v0.7.5](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.5) · [Changelog](CHANGELOG.md) · [Complete driver matrix](docs/ANDROID_GPU_DRIVER.md) · [Source](https://github.com/rufl/POORD2ROID) · [Licenses and credits](THIRD-PARTY-NOTICES.md)
+- [Português](README.md) · [Latest release v0.7.8](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.8) · [Changelog](CHANGELOG.md) · [Complete driver matrix](docs/ANDROID_GPU_DRIVER.md) · [Source](https://github.com/rufl/POORD2ROID) · [Licenses and credits](THIRD-PARTY-NOTICES.md)
 
 An experimental Android port for running the Nintendo Switch version of **Diablo II: Resurrected** on compatible Android devices. It runs the game's ARM64 code through an NVN→Vulkan compatibility layer; it is not a conventional emulator.
 
@@ -15,12 +15,12 @@ The APK contains the launcher and port, not game data. Use the import flow suppo
 
 ## Install and run
 
-1. Get the current APK from [v0.7.5](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.5), browse all [Releases](https://github.com/rufl/POORD2ROID/releases), or build it using [`docs/BUILD_ON_WINDOWS.md`](docs/BUILD_ON_WINDOWS.md). Install only an APK whose source and signing identity you trust.
+1. Get the current APK from [v0.7.8](https://github.com/rufl/POORD2ROID/releases/tag/v0.7.8), browse all [Releases](https://github.com/rufl/POORD2ROID/releases), or build it using [`docs/BUILD_ON_WINDOWS.md`](docs/BUILD_ON_WINDOWS.md). Install only an APK whose source and signing identity you trust.
 2. Open the launcher and import a data package prepared from your own game files.
 3. Start with **System Vulkan**. Try alternative drivers one at a time and only when listed for your device.
 4. Launch the game. For failures, collect logs as described in the build guide and include device model, Android version, GPU, selected driver, and relevant logs in an issue. Never attach keys or game files.
 
-Unreleased builds after v0.7.6 correct the Android surface orientation selection: `preTransform` now uses `currentTransform` so the game framebuffer, touch overlay, and cursor share one orientation, with `identity` only as the fallback when `currentTransform` is unsupported. The v0.7.6 package-only APK, Java launcher/game activity, `classes.dex`, normal/large touch-layout profiles, and recent native changes are retained. No Android device was attached for final visual confirmation; version, size, and SHA-256 are recorded in the [changelog](CHANGELOG.md).
+Versions after v0.7.6 correct Android surface orientation selection: `preTransform` now uses `currentTransform` so the game framebuffer, touch overlay, and cursor share one orientation, with `identity` only as the fallback when `currentTransform` is unsupported. v0.7.8 also adds a persistent in-menu sharpening control with a linear-blit fallback when the Vulkan pass is unavailable. The complete package-only APK, Java launcher/game activity, `classes.dex`, normal/large touch-layout profiles, and recent native changes are retained. No Android device was attached for final visual confirmation; version, size, and SHA-256 are recorded in the [changelog](CHANGELOG.md).
 
 The launcher supports touch controls and Android/HID game controllers. The GameSir G8+ has not been specifically validated; operation depends on how Android exposes it as a compatible controller.
 
@@ -31,9 +31,9 @@ The launcher lists only options matching detected hardware and packaged assets; 
 | Option | Known hardware/status |
 | --- | --- |
 | **System Vulkan** | Manufacturer Vulkan driver; recommended baseline and recovery path. |
-| **MaliSX2 0.6.0** | Mali kbase via `/dev/mali0`, Android API 29+. Preferred for G31/G51/G52/G57/G68/G76/G77/G78/G78AE/G310/G510/G610/G710/G615/G715/G620/G720. Experimental and no MSAA. |
+| **MaliSX2 0.6.1** | Mali kbase via `/dev/mali0`, Android API 29+. Preferred for G31/G51/G52/G57/G68/G76/G77/G78/G78AE/G310/G510/G610/G710/G615/G715/G620/G720. Experimental and no MSAA. |
 | **JimVulkan PanVK r10** | Mali kbase via `/dev/mali0`, Android API 31+. Preferred for G71/G72 and alternate for Bifrost/G77-class devices. Experimental/non-conformant. |
-| **Mesa Turnip T30** | Qualcomm/Adreno via KGSL, Android API 30+. Never use on Mali. |
+| **Mesa Turnip v27.0.0-20261126** | Qualcomm/Adreno via KGSL, Android API 30+. Never use on Mali. |
 
 On Xiaomi 11T (Dimensity 1200, Mali-G77 MC9), the expected choices are System Vulkan, MaliSX2, and PanVK when their packages are available. Passing driver initialization does not prove stable gameplay. Previous user reports found MaliSX2 the most stable option in their tests, but this is not a reproducible benchmark or a guarantee.
 

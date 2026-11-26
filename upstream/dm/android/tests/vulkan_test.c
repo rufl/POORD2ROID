@@ -27,6 +27,13 @@ int nvn_dirty_tracked(const void *addr, size_t len) { (void)len; return addr==tr
 int nvn_dirty_since(const void *addr, size_t len, uint64_t stamp) { (void)len; return addr==tracked_vertices && dirty_generation>stamp; }
 uint64_t nvn_dirty_now(void) { return dirty_generation; }
 void *front_metal_layer(void) { return NULL; }
+void dm_sharpen_set(float strength, int radius, float threshold) { (void)strength; (void)radius; (void)threshold; }
+void dm_sharpen_get(float *strength, int *radius, float *threshold) {
+    if (strength) *strength = 0.0f;
+    if (radius) *radius = 1;
+    if (threshold) *threshold = 0.0f;
+}
+int dm_sharpen_enabled(void) { return 0; }
 static unsigned char packets[512];
 static size_t used;
 static void packet(unsigned op, const void *payload, size_t n) {
