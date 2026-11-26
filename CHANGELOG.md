@@ -11,6 +11,7 @@ Release artifacts contain the Android port and launcher only. They do not contai
 - The Vulkan sharpen pass maps the selected source crop to the destination rectangle, preserves cleared letterbox pixels, falls back to the linear blit on initialization/resource failure, and caches swapchain framebuffers and descriptor resources so enabled sharpening does not allocate Vulkan objects every frame.
 - Refreshed bundled drivers to MaliSX2 0.6.1 and Mesa Turnip v27.0.0-20261126. PanVK r10 was already the latest pinned release and remains unchanged.
 - Fixed Android startup parsing for the Java-persisted `handheld_`/`console_` sharpening keys. The previous build rejected `sharpen_preset` as an unknown launch setting before the game could start.
+- Reduced the sharpening fragment pass to the direction whose result is actually used, removing discarded texture samples that amplified GPU stalls during camera movement while preserving the current output for every radius.
 
 ### Packaging
 

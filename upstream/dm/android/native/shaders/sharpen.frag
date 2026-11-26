@@ -52,31 +52,16 @@ void main() {
         return;
     }
     
-    // Clamp radius
+    
+    // Each later cas_sample overwrote the previous result. Keep the last
+    // effective direction for each radius and avoid the discarded samples.
     int r = clamp(params.radius, 1, 3);
     float thresh = clamp(params.threshold, 0.0, 0.1);
-    
-    vec3 sharp = texture(u_3d_image, uv).rgb;
-    
-    // CAS-style adaptive sharpening with configurable radius
-    if (r >= 1) {
-        vec2 dir = vec2(1.0, 0.0) / vec2(textureSize(u_3d_image, 0));
-        sharp = cas_sample(uv, dir, thresh);
-        dir = vec2(0.0, 1.0) / vec2(textureSize(u_3d_image, 0));
-        sharp = cas_sample(uv, dir, thresh);
-    }
-    if (r >= 2) {
-        vec2 dir = vec2(1.0, 1.0) / vec2(textureSize(u_3d_image, 0));
-        sharp = cas_sample(uv, dir, thresh);
-        dir = vec2(-1.0, 1.0) / vec2(textureSize(u_3d_image, 0));
-        sharp = cas_sample(uv, dir, thresh);
-    }
-    if (r >= 3) {
-        vec2 dir = vec2(2.0, 0.0) / vec2(textureSize(u_3d_image, 0));
-        sharp = cas_sample(uv, dir, thresh);
-        dir = vec2(0.0, 2.0) / vec2(textureSize(u_3d_image, 0));
-        sharp = cas_sample(uv, dir, thresh);
-    }
+    vec2 texel = 1.0 / vec2(textureSize(u_3d_image, 0));
+    vec2 dir = r == 1 ? vec2(0.0, 1.0) :
+               r == 2 ? vec2(-1.0, 1.0) :
+                        vec2(0.0, 2.0);
+    vec3 sharp = cas_sample(uv, dir * texel, thresh);
     
     vec3 original = texture(u_3d_image, uv).rgb;
     vec3 result = clamp(mix(original, sharp, params.strength), vec3(0.0), vec3(1.0));
