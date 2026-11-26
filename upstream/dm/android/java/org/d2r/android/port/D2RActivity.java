@@ -115,7 +115,7 @@ public final class D2RActivity extends NativeActivity {
     private boolean diagnosticsEnabled;
     private boolean overlayEnabled = true;
     private boolean controlsEnabled = true;
-    private int qualityPreset;                                  // 0 自动 / 1 高质量 / 2 平衡 / 3 性能 / 4 超性能 | 0 auto / 1 high / 2 balanced / 3 performance / 4 ultra performance
+    private int qualityPreset = 3;                              // Default: performance / 70% 3D scale; 0 auto / 1 high / 2 balanced / 3 performance / 4 ultra performance
     private static final int[] QUALITY_LEVELS = {-1, 0, 1, 2, 3}; // 与 native 约定：-1 自动、0 高、1 平衡、2 性能、3 超性能 | the native contract
     private static final int[][] AUTO_BOUNDS_PRESETS = {{50, 100}, {60, 100}, {70, 100}, {60, 85}, {75, 100}};
     private int autoBoundsIndex;
@@ -133,8 +133,8 @@ public final class D2RActivity extends NativeActivity {
         {0.7f, 2, 0.03f}
     };
     private static final int SHARPEN_CUSTOM = SHARPEN_PRESETS.length;
-    private int sharpenPreset;
-    private float sharpenStrength = SHARPEN_PRESETS[0][0];
+    private int sharpenPreset = 1;                              // Default: low sharpening for the 70% performance profile
+    private float sharpenStrength = SHARPEN_PRESETS[1][0];
     private TextView menuSharpenRow;
     // The same palette as the launcher (GOLD/PARCHMENT there), so the menu looks like part of the same app.
     private static final int GOLD = 0xffe8c078;
@@ -728,6 +728,8 @@ public final class D2RActivity extends NativeActivity {
                 }
             } catch (NumberFormatException ignored) { }
         }
+        // A fresh profile starts at a persistent 70% 3D scale; an existing saved profile remains authoritative.
+        applyQualityPreset();
         // 帧率档：配置里写了就按配置；缺省上限为 60 Hz。原生启动与这里的菜单标签使用同一设置。
         // Use the saved frame-rate preset when present; default to a 60 Hz cap. Native startup and this menu label share the setting.
         String hzSetting = readProfileSetting("present_hz");
@@ -762,8 +764,8 @@ public final class D2RActivity extends NativeActivity {
         debugView.setTypeface(Typeface.MONOSPACE);
         debugView.setTextSize(12);
         debugView.setTextColor(0xffe4dcc9);
-        debugView.setBackgroundColor(0xa6000000);
-        debugView.setClickable(false);
+        debugView.setBackgroundColor(0x66000000);
+        debugView.setShadowLayer(2.0f, 0.0f, 1.0f, 0xcc000000);
         debugView.setFocusable(false);
         debugView.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         int padding = (int)(8 * getResources().getDisplayMetrics().density);
