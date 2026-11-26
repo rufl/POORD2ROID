@@ -350,6 +350,27 @@ static void sharpen_cleanup(void) {
     sharpen_ready = 0;
 }
 
+// Keep the user's sharpening selection, but temporarily use the existing linear blit when
+// the previous GPU window is already above the frame budget. Hysteresis prevents toggling.
+static int sharpen_adaptive_bypass(void) {
+    static int bypass;
+    static int logged = -1;
+    dm_android_debug_stats stats;
+    pthread_mutex_lock(&debug_lock);
+    stats = debug_stats;
+    pthread_mutex_unlock(&debug_lock);
+    if (stats.gpu_valid && stats.gpu_ms > 0.0) {
+        double next = bypass ? 24.0 : 30.0;
+        if ((bypass && stats.gpu_ms <= next) || (!bypass && stats.gpu_ms >= next))
+            bypass = !bypass;
+    }
+    if (logged != bypass) {
+        LOG("[vulkan-sharpen] adaptive=%s gpu_ms=%.2f", bypass ? "bypass" : "on", stats.gpu_ms);
+        logged = bypass;
+    }
+    return bypass;
+}
+
 // Called from present path when dm_sharpen_enabled() is true
 // Replaces the vkCmdBlitImage at line ~1414
 // src_image: 3D render target (e->image)
@@ -361,8 +382,8 @@ static int sharpen_draw(VkCommandBuffer command, image_entry *src_image, VkImage
                         int sx, int sy, int sw, int sh,
                         int dx, int dy, int dw, int dh) {
     if (!dm_sharpen_enabled()) return 0;
+    if (sharpen_adaptive_bypass()) return 0;
     sharpen_prepare();
-    if (!sharpen_ready) return 0;
     
     float strength = 0.0f;
     int radius = 1;
